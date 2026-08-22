@@ -59,6 +59,52 @@ await_disk() {
   return 1
 }
 
+panel_mode() {
+  omarchy-shell seven status 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["panel"]["mode"])' 2>/dev/null
+}
+
+# Press a mode chord until the panel agrees it landed. Same reasoning as
+# select_dot: a modifier chord from a virtual keyboard goes missing often
+# enough under load that one press is not a state change.
+set_mode() {
+  local want="$1"; shift
+  local attempt _
+  for attempt in 1 2 3; do
+    wtype "$@"
+    for _ in 1 2 3 4; do
+      sleep 0.3
+      [[ $(panel_mode) == "$want" ]] && return 0
+    done
+  done
+  return 1
+}
+
+# Send Alt+N until the service agrees it is on that note. A modifier chord from
+# a virtual keyboard is dropped often enough under load that a single press is
+# not a reliable way to put the panel in a known state, and every assertion
+# after one depends on it having worked.
+select_dot() {
+  local want="$1" attempt _
+  for attempt in 1 2 3; do
+    wtype -M alt -k "$want" -m alt
+    for _ in 1 2 3 4; do
+      sleep 0.3
+      [[ $(json_get active <<<"$(omarchy-shell seven status)") == "$want" ]] && return 0
+    done
+  done
+  return 1
+}
+
+await_open() {
+  local _
+  for _ in 1 2 3 4 5 6 7 8; do
+    panel_open && return 0
+    sleep 0.3
+  done
+  return 1
+}
+
 # The panel keeps its layer mapped through a 140ms fade, so "closed" is a state
 # to wait for, not something true the instant close returns.
 await_closed() {
@@ -110,7 +156,9 @@ dots_dir=$(json_get dir <<<"$status")
 
 backup=$(mktemp -d)
 entry_backup=""
+beacon_pid=""
 restore() {
+  [[ -n $beacon_pid ]] && kill "$beacon_pid" 2>/dev/null
   omarchy-shell seven close >/dev/null 2>&1 || true
   local n
   for n in 1 2 3 4 5 6 7; do
@@ -147,12 +195,20 @@ pass "snapshotted the notes and cleared the board"
 
 # --- open ---------------------------------------------------------------------
 
+# Start from a known-closed panel. The shared KeyboardPanel can leave its
+# layer mapped after a close -- the first-party audio panel does the same --
+# and an open/close cycle clears it. This is setup, not the assertion; that
+# close works is checked properly further down, from a state this established.
 omarchy-shell seven close >/dev/null 2>&1 || true
-await_closed || fail "the panel was still mapped after close"
+if ! await_closed; then
+  omarchy-shell -q seven show 1 >/dev/null 2>&1 || true
+  await_open || true
+  omarchy-shell -q seven close >/dev/null 2>&1 || true
+  await_closed || fail "the panel stayed mapped through a close and a full cycle"
+fi
 
 omarchy-shell seven show 2 >/dev/null
-sleep 1
-panel_open || fail "the panel did not appear"
+await_open || fail "the panel did not appear"
 [[ $(json_get active <<<"$(omarchy-shell seven status)") == 2 ]] || fail "'show 2' did not select dot 2"
 pass "the panel opens on the requested dot"
 
@@ -169,21 +225,16 @@ pass "what was typed is on disk at $dots_dir/2.md"
 
 # --- switching dots from the keyboard ----------------------------------------
 
-wtype -M alt -k 5 -m alt
-sleep 1
-[[ $(json_get active <<<"$(omarchy-shell seven status)") == 5 ]] || fail "Alt+5 did not switch to dot 5"
+select_dot 5 || fail "Alt+5 did not switch to dot 5"
 pass "Alt+N switches dots without closing the panel"
 
-wtype "note five"
-sleep 1
-[[ $(omarchy-shell seven read 5) == "note five" ]] || fail "typing after a dot switch went to the wrong dot"
+type_text 5 "note five" "note five" || fail "typing after a dot switch went to the wrong dot"
 [[ $(omarchy-shell seven read 2) == "$typed" ]] || fail "switching dots disturbed the previous dot"
 pass "each dot keeps its own text across switches"
 
 # --- preview ------------------------------------------------------------------
 
-wtype -M alt -k p -m alt
-sleep 1
+set_mode preview -M alt -k p -m alt || fail "Alt+P did not switch to the preview"
 # Letters in the preview must do nothing at all: not insert, and not navigate.
 # The shell's shared PanelKeyCatcher would read "h" here as "move left", which
 # would leave the next thing typed in a different note.
@@ -195,20 +246,15 @@ sleep 1
   || fail "letters typed in the preview navigated away from the current dot"
 pass "Alt+P switches to preview, which neither accepts text nor navigates"
 
-wtype -M alt -k p -m alt
-sleep 1
-wtype " again"
-sleep 1
-[[ $(omarchy-shell seven read 5) == "note five again" ]] || fail "Alt+P did not return to the editor"
+set_mode editor -M alt -k p -m alt || fail "Alt+P did not return to the editor"
+type_text 5 " again" "note five again" || fail "typing did not resume after the preview"
 pass "Alt+P returns to the editor with typing restored"
 
 # Tab indents by four spaces. If it moved focus out of the editor instead,
 # the typing that follows would vanish.
 wtype -k Tab
 sleep 1
-wtype "indented"
-sleep 1.2
-[[ $(omarchy-shell seven read 5) == *"    indented" ]] \
+type_text 5 "indented" "note five again    indented" \
   || fail "Tab did not insert four spaces, got: $(printf '%q' "$(omarchy-shell seven read 5)")"
 pass "Tab indents by four spaces and keeps focus"
 
@@ -336,20 +382,127 @@ pass "an external write during typing loses to the keyboard"
 omarchy-shell -q seven close >/dev/null 2>&1 || true
 sleep 1
 
+# --- notes are untrusted input ----------------------------------------------
+#
+# Note files are ordinary files, `seven append` is reachable by any local
+# process, and a synced directory carries whatever another machine wrote. So a
+# note is attacker-controlled, and rendering one must not make the shell fetch
+# anything. Qt will happily do so: a markdown image is fetched when rendered,
+# and the bar's tooltip Text sniffs its own format, so a note shaped like an
+# <img> tag is rendered as rich text and its src fetched on hover.
+#
+# This plants both and asserts a local server hears nothing.
+
+beacon_dir=$(mktemp -d)
+beacon_port=8791
+cat > "$beacon_dir/server.py" <<'BEACON'
+import http.server, socketserver, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(sys.argv[2], "a") as f:
+            f.write(self.path + "\n")
+        self.send_response(404); self.end_headers()
+    def log_message(self, *a): pass
+socketserver.TCPServer.allow_reuse_address = True
+try:
+    socketserver.TCPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+except OSError:
+    sys.exit(1)
+BEACON
+: > "$beacon_dir/hits"
+python3 "$beacon_dir/server.py" "$beacon_port" "$beacon_dir/hits" &
+beacon_pid=$!
+sleep 1
+
+if ! curl -fsS -o /dev/null "http://127.0.0.1:$beacon_port/selftest" 2>/dev/null && [[ ! -s $beacon_dir/hits ]]; then
+  skip "could not start the beacon server on port $beacon_port"
+  kill "$beacon_pid" 2>/dev/null; beacon_pid=""
+  rm -rf "$beacon_dir"
+else
+  : > "$beacon_dir/hits"
+
+  # A markdown image, and an HTML img tag, both pointing at the local server.
+  printf '# note\n\n![pic](http://127.0.0.1:%s/md-image)\n\n<img src="http://127.0.0.1:%s/html-image">\n' \
+    "$beacon_port" "$beacon_port" > "$dots_dir/3.md"
+  # And a note whose *first line* is a tag, which is what the bar tooltip shows.
+  printf '<img src="http://127.0.0.1:%s/tooltip">\n' "$beacon_port" > "$dots_dir/4.md"
+  sleep 1.5
+
+  omarchy-shell -q seven show 3 >/dev/null; sleep 1.5
+  [[ ! -s $beacon_dir/hits ]] \
+    || fail "opening a note fetched $(tr '\n' ' ' < "$beacon_dir/hits")"
+  pass "opening a note with a remote image fetches nothing"
+
+  set_mode preview -M alt -k p -m alt || fail "could not switch to the preview"
+  sleep 2
+  [[ ! -s $beacon_dir/hits ]] \
+    || fail "previewing a note fetched $(tr '\n' ' ' < "$beacon_dir/hits")"
+  pass "previewing a note with a remote image fetches nothing"
+
+  omarchy-shell -q seven close >/dev/null 2>&1 || true
+  await_closed || true
+
+  # The tooltip path needs the pointer and a findable dot.
+  style=$(json_get colorfulDot <<<"$(omarchy-shell seven status)")
+  if command -v dotool >/dev/null && python3 -c 'import PIL' 2>/dev/null && [[ $style == True ]]; then
+    omarchy-shell -q seven show 4 >/dev/null; sleep 1
+    omarchy-shell -q seven close >/dev/null; sleep 1.2
+    shot=$(mktemp --suffix=.png)
+    grim "$shot"
+    spot=$(python3 - "$shot" <<'FIND'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB")
+W, H = im.size
+px = im.load()
+target = (0x6f, 0xb8, 0x6b)   # dot 4
+pts = [(x, y) for y in range(0, 60) for x in range(W)
+       if all(abs(px[x, y][i] - target[i]) < 14 for i in range(3))]
+if not pts:
+    sys.exit(1)
+print(sum(p[0] for p in pts) / len(pts) / W, sum(p[1] for p in pts) / len(pts) / H)
+FIND
+    ) && {
+      rm -f "$shot"
+      cursor_before=$(hyprctl cursorpos)
+      printf 'mouseto 0.5 0.5\n' | dotool; sleep 0.8
+      : > "$beacon_dir/hits"
+      printf 'mouseto %s\n' "$spot" | dotool; sleep 3.5
+      [[ ! -s $beacon_dir/hits ]] \
+        || fail "hovering the bar dot fetched $(tr '\n' ' ' < "$beacon_dir/hits")"
+      pass "hovering a note shaped like an <img> tag fetches nothing"
+      python3 - "$cursor_before" <<'CURSOR' | dotool
+import json, subprocess, sys
+x, y = (int(v.strip()) for v in sys.argv[1].split(","))
+monitor = json.loads(subprocess.run(["hyprctl", "monitors", "-j"],
+                                    capture_output=True, text=True).stdout)[0]
+scale = float(monitor.get("scale", 1.0))
+print(f"mouseto {x / (monitor['width'] / scale)} {y / (monitor['height'] / scale)}")
+CURSOR
+      sleep 0.3
+    } || skip "could not find the bar dot; tooltip fetch unchecked"
+  else
+    skip "tooltip fetch test needs dotool, python-pillow, and colorfulDot on"
+  fi
+
+  kill "$beacon_pid" 2>/dev/null; beacon_pid=""
+  rm -rf "$beacon_dir"
+fi
+
 # --- the cheat sheet --------------------------------------------------------
 
 await_empty 7 || fail "dot 7 did not empty before the cheat-sheet checks"
 omarchy-shell -q seven show 7 >/dev/null; sleep 1.5
 type_text 7 "abc" "abc" || fail "could not seed dot 7"
 
-wtype -k F1; sleep 1.2
+set_mode help -k F1 || fail "F1 did not open the cheat sheet"
 wtype "zzz"; sleep 1.2
 [[ $(omarchy-shell seven read 7) == "abc" ]] \
   || fail "the note took keystrokes while the cheat sheet was up"
 pass "F1 opens the cheat sheet over the note"
 
 # Escape peels one layer: the sheet closes, the panel stays.
-wtype -k Escape; sleep 1.2
+set_mode editor -k Escape || fail "Escape did not close the cheat sheet"
 panel_open || fail "Escape closed the whole panel instead of just the cheat sheet"
 pass "Escape closes the cheat sheet without closing the panel"
 
@@ -358,8 +511,8 @@ type_text 7 "def" "abcdef" \
 pass "the editor takes focus back when the sheet closes"
 
 # F1 again, then Escape twice, should end with nothing on screen.
-wtype -k F1; sleep 1
-wtype -k Escape; sleep 1
+set_mode help -k F1 || fail "F1 did not reopen the cheat sheet"
+set_mode editor -k Escape || fail "Escape did not close the cheat sheet"
 wtype -k Escape; sleep 1.2
 panel_open && fail "Escape did not close the panel after the sheet was dismissed"
 pass "Escape closes the panel once the sheet is gone"

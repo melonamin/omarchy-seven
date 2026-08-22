@@ -119,9 +119,9 @@ test("elide keeps short text intact and truncates long text with an ellipsis", (
 
 test("the bar tooltip names the dot and its gist", () => {
   const texts = ["", "# Work\nnotes", "", "", "", "", ""]
-  assert.equal(model.tooltipFor(texts, 0), "Dot 1 · empty")
-  assert.equal(model.tooltipFor(texts, 1), "Dot 2 · Work")
-  assert.equal(model.tooltipFor([], 0), "Dot 1 · empty")
+  assert.equal(model.tooltipFor(texts, 0), "<font>Dot 1 · empty</font>")
+  assert.equal(model.tooltipFor(texts, 1), "<font>Dot 2 · Work</font>")
+  assert.equal(model.tooltipFor([], 0), "<font>Dot 1 · empty</font>")
 })
 
 test("append lands on its own line and never leads with a blank one", () => {
@@ -496,4 +496,72 @@ test("the caret survives a reload when the text before it did", () => {
   // Prefix matches but the new text is shorter than the caret.
   assert.equal(model.caretAfterReload("abcdef", "abcd", 6), 4)
   assert.equal(model.caretAfterReload("", "fresh", 0), 0)
+})
+
+// ------------------------------------------------------------------ security
+//
+// A note is not trusted input: any local process can write the files, `seven
+// append` is reachable by anything that can talk to the shell, and a synced
+// directory carries what another machine put there.
+
+test("the tooltip cannot smuggle markup into the bar", () => {
+  // The bar renders the tooltip with AutoText, so a note shaped like a tag is
+  // rendered as rich text -- and Qt fetches what an <img> points at.
+  const attack = ['<img src="http://evil.example/beacon.png">']
+  const out = model.tooltipFor(attack, 0)
+
+  assert.ok(!/<img/i.test(out), "an img tag reached the tooltip")
+  assert.ok(out.includes("&lt;img"), "the tag should be escaped, not dropped")
+  assert.ok(!out.includes('"http://evil.example'), "an unescaped attribute survived")
+  // Wrapped in a tag of our own so the format is settled rather than sniffed.
+  assert.ok(out.startsWith("<font>") && out.endsWith("</font>"))
+
+  // The other characters that matter for attribute and entity injection.
+  assert.equal(model.escapeRichText(`&<>"'`), "&amp;&lt;&gt;&quot;&#39;")
+  // Escaping is not applied twice.
+  assert.equal(model.escapeRichText("a &amp; b"), "a &amp;amp; b")
+})
+
+test("preview markdown cannot make the shell fetch anything", () => {
+  // Qt loads the target of an image node; a link is inert until clicked.
+  assert.equal(model.previewSource("![x](http://evil.example/b.png)"),
+    "[x](http://evil.example/b.png)")
+  assert.equal(model.previewSource("![](u)"), "[](u)")
+  // Reference-style images start the same way and are defused the same way.
+  assert.equal(model.previewSource("![alt][ref]"), "[alt][ref]")
+
+  // Backslash-escaping the "!" instead of removing it would be reversible:
+  // this input already renders a literal "!", and adding a backslash would
+  // make it an escaped backslash followed by a live image.
+  assert.equal(model.previewSource("\\\\![x](u)"), "\\\\[x](u)")
+  assert.ok(!/!\[/.test(model.previewSource("![a](1) text ![b](2) \\\\![c](3)")))
+
+  // Ordinary content is untouched.
+  assert.equal(model.previewSource("# Heading\n\n- [ ] task\n\n[link](u)"),
+    "# Heading\n\n- [ ] task\n\n[link](u)")
+  assert.equal(model.previewSource("a ! b [c](d)"), "a ! b [c](d)")
+  assert.equal(model.previewSource(""), "")
+})
+
+test("only browser and mail schemes are handed to xdg-open", () => {
+  for (const url of ["http://x", "https://x", "HTTPS://x", "mailto:a@b", "MailTo:a@b"]) {
+    assert.equal(model.isSafeLink(url), true, `${url} should be allowed`)
+  }
+  for (const url of [
+    "file:///etc/passwd",          // reads a local file
+    "file:///home/u/x.desktop",    // xdg-open will happily launch this
+    "javascript:alert(1)",
+    "data:text/html,<script>",
+    "ftp://x",
+    "ssh://host",
+    "vscode://x",                  // any app-registered scheme
+    "x.desktop",                   // no scheme at all
+    "/etc/passwd",
+    "",
+    " http://x",                   // leading space, and control characters
+    "http://x\nDROP",
+    "http://x\ty",
+  ]) {
+    assert.equal(model.isSafeLink(url), false, `${url} should be refused`)
+  }
 })

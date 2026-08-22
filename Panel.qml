@@ -104,6 +104,16 @@ Panel {
     helpOpen = !helpOpen
   }
 
+  // Tell the service which face the panel is showing, so `seven status` can
+  // report it. Cheap, and it is the only way to see this state from outside.
+  function publishUiState() {
+    if (!service || typeof service.setUiState !== "function") return
+    service.setUiState({
+      open: root.opened,
+      mode: root.helpOpen ? "help" : (root.previewing ? "preview" : "editor")
+    })
+  }
+
   // Escape peels one layer at a time: the sheet first, the panel second.
   function dismiss() {
     if (helpOpen) helpOpen = false
@@ -135,6 +145,7 @@ Panel {
       // panel is out of sight.
       service.flush()
     }
+    publishUiState()
   }
 
   onActiveIndexChanged: {
@@ -142,8 +153,15 @@ Panel {
     if (opened) focusSoon()
   }
 
-  onPreviewingChanged: if (opened) focusSoon()
-  onHelpOpenChanged: if (opened) focusSoon()
+  onPreviewingChanged: {
+    publishUiState()
+    if (opened) focusSoon()
+  }
+
+  onHelpOpenChanged: {
+    publishUiState()
+    if (opened) focusSoon()
+  }
 
   // A dot rewritten out from under the panel: edited in another program, or
   // changed by an IPC clear/append. Always adopt it.
@@ -328,9 +346,17 @@ Panel {
             anchors.fill: parent
             visible: root.previewing && !root.helpOpen
             foreground: Color.popups.text
-            source: root.activeText
+            // Empty while hidden: a Text still parses its markdown and loads
+            // what that markdown references even when nothing is drawn, so a
+            // note left unread would otherwise reach out the moment the panel
+            // opened on any note at all.
+            source: root.previewing ? SevenModel.previewSource(root.activeText) : ""
 
             onLinkActivated: function(url) {
+              // A note chooses both the label and the target, so the reader
+              // cannot see where a link goes. Only schemes that open a browser
+              // or a mail client are passed on.
+              if (!SevenModel.isSafeLink(url)) return
               Quickshell.execDetached(["xdg-open", url])
               root.close()
             }

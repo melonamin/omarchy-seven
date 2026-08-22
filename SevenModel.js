@@ -130,6 +130,53 @@ function countsLabel(text) {
   return plural(countWords(text), "word") + " · " + plural(countChars(text), "char")
 }
 
+// ------------------------------------------------------------ untrusted text
+//
+// A note is not trusted input. The files are ordinary files any local process
+// can write, `seven append` is open to anything that can reach the shell's
+// socket, and a synced directory carries whatever another machine put in it.
+// Everything below assumes a note is hostile and makes it inert.
+
+function escapeRichText(value) {
+  return string(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+// Markdown for the preview, with image syntax defused.
+//
+// Qt renders `![alt](url)` by fetching url -- so a note could make the shell
+// issue an HTTP request, to an address of the note author's choosing, simply
+// by being previewed. Dropping the "!" leaves an ordinary link: the words stay
+// visible, and nothing is fetched until the reader deliberately clicks.
+//
+// The "!" is removed rather than backslash-escaped because escaping can be
+// undone: "\![x](u)" is already a literal "!" plus a link, and prefixing
+// another backslash yields "\\![x](u)" -- an escaped backslash followed by a
+// live image again. Removing the character has no such inverse.
+function previewSource(text) {
+  return string(text).replace(/!(?=\[)/g, "")
+}
+
+// Schemes a link in a note may hand to xdg-open. http(s) and mailto open a
+// browser or a mail client; file:, and any scheme some other application has
+// registered a handler for, can open or run things on this machine, and a note
+// gets to choose the label so the reader cannot see where it goes.
+var SAFE_LINK_SCHEMES = ["http", "https", "mailto"]
+
+function isSafeLink(url) {
+  var value = string(url)
+  // A control character or whitespace has no business in a URL being handed to
+  // another program, whatever the scheme says.
+  if (/[\x00-\x20\x7f]/.test(value)) return false
+  var match = /^([A-Za-z][A-Za-z0-9+.\-]*):/.exec(value)
+  if (!match) return false
+  return SAFE_LINK_SCHEMES.indexOf(match[1].toLowerCase()) !== -1
+}
+
 // One-line gist of a dot for the bar tooltip. Markdown leaders are stripped so
 // a heading reads as its words rather than as "## words".
 function titleFor(text) {
@@ -155,12 +202,19 @@ function elide(text, limit) {
 }
 
 // Tooltip text for the bar button: which dot is showing and what is in it.
+// Tooltip text for the bar button: which dot is showing and what is in it.
+//
+// The bar draws this with a Text that sets no textFormat, so Qt's AutoText
+// sniffs the string and renders anything tag-shaped as rich text -- which for
+// a note beginning `<img src="http://...">` means the shell fetches that URL
+// on hover. The content is escaped and wrapped in a tag of our own, which
+// both settles the format question and leaves no markup a note can supply.
 function tooltipFor(texts, activeIndex) {
   var index = clampIndex(activeIndex)
   var title = titleFor(texts && texts[index])
   var label = "Dot " + (index + 1)
-  if (title === "") return label + " · empty"
-  return label + " · " + elide(title, 42)
+  var body = title === "" ? label + " · empty" : label + " · " + elide(title, 42)
+  return "<font>" + escapeRichText(body) + "</font>"
 }
 
 // Appending from the CLI should read like appending in an editor: land on its
@@ -583,6 +637,9 @@ if (typeof module !== "undefined" && module.exports) {
     titleFor: titleFor,
     elide: elide,
     tooltipFor: tooltipFor,
+    escapeRichText: escapeRichText,
+    previewSource: previewSource,
+    isSafeLink: isSafeLink,
     appendText: appendText,
     normalize: normalize,
     settingsFromEntry: settingsFromEntry,

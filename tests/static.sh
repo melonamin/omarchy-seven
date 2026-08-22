@@ -168,6 +168,44 @@ if sed 's,//.*,,' "$root_dir/Panel.qml" "$root_dir/DotEditor.qml" \
 fi
 pass "deferred calls go through closures, not bare function references"
 
+# --- untrusted note content -------------------------------------------------
+
+# A note is attacker-controllable: the files are ordinary files, `seven append`
+# is open to any local process, and a synced directory carries what another
+# machine wrote. These three are the paths note text takes out of the plugin.
+
+# The bar's tooltip Text sets no textFormat, so Qt sniffs the string and
+# renders anything tag-shaped as rich text -- which fetches what an <img>
+# points at.
+grep -q 'escapeRichText' "$root_dir/SevenModel.js" || fail "SevenModel.js has no rich-text escaping"
+sed -n '/function tooltipFor/,/^}/p' "$root_dir/SevenModel.js" | grep -q 'escapeRichText' \
+  || fail "tooltipFor does not escape the note text it puts in the bar"
+pass "the bar tooltip escapes note content"
+
+# Qt fetches the target of a markdown image node when it renders one.
+sed -n '/DotPreview {/,/^          }/p' "$root_dir/Panel.qml" | grep -q 'SevenModel.previewSource' \
+  || fail "the preview renders note markdown without defusing image syntax"
+sed -n '/DotPreview {/,/^          }/p' "$root_dir/Panel.qml" | grep -q 'root.previewing ?' \
+  || fail "the preview should hold no source while hidden; it parses and fetches either way"
+pass "preview markdown is defused and idle while hidden"
+
+# xdg-open acts on whatever scheme it is given, and a note picks both the link
+# label and its target.
+sed -n '/onLinkActivated/,/^            }/p' "$root_dir/Panel.qml" | grep -q 'SevenModel.isSafeLink' \
+  || fail "a link from a note reaches xdg-open without a scheme check"
+pass "only allow-listed link schemes reach xdg-open"
+
+# Every other Text that shows note content must say it is plain.
+if grep -n 'Text {' "$root_dir"/*.qml >/dev/null; then
+  missing=$(awk '
+    /^[[:space:]]*Text[[:space:]]*\{/ { intext=1; fmt=0; line=NR }
+    intext && /textFormat:/ { fmt=1 }
+    intext && /^[[:space:]]*\}/ { if (!fmt) print FILENAME ":" line; intext=0 }
+  ' "$root_dir"/*.qml)
+  [[ -z $missing ]] || fail "Text without an explicit textFormat (Qt will sniff it): $missing"
+fi
+pass "every Text sets its textFormat explicitly"
+
 # --- hygiene ------------------------------------------------------------------
 
 link=$(find "$root_dir" -name .git -prune -o -type l -print -quit)

@@ -38,6 +38,21 @@ Item {
   property bool shortcutRegistered: false
   property string shortcutDiagnostic: ""
 
+  // What the panel is currently showing. Pushed in by Panel.qml rather than
+  // derived here, because the panel owns that state and there is one per
+  // display. Reported by `status` so the mode is observable from outside --
+  // useful when a shortcut appears to do nothing and you need to know whether
+  // the keystroke arrived at all.
+  property var uiState: ({ open: false, mode: "editor" })
+
+  function setUiState(state) {
+    var value = state || {}
+    uiState = {
+      open: value.open === true,
+      mode: String(value.mode || "editor")
+    }
+  }
+
   property var texts: ["", "", "", "", "", "", ""]
   property int activeIndex: 0
   property bool ready: false
@@ -425,6 +440,7 @@ Item {
         filled: root.filledCount,
         shortcut: root.requestedShortcut,
         colorfulDot: root.settings.colorfulDot,
+        panel: root.uiState,
         shortcutRegistered: root.shortcutRegistered,
         diagnostic: root.shortcutDiagnostic,
         counts: root.texts.map(function(value) { return String(value || "").length })

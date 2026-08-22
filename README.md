@@ -52,7 +52,8 @@ Omarchy 4 (Quattro) or newer, running `omarchy-shell` on Hyprland.
 
 No external dependencies: everything used — `hyprctl`, `mkdir`,
 `omarchy-shell` — ships with Omarchy. Nothing is downloaded at runtime and the
-plugin makes no network connections. (`node` is used by the test suite only.)
+plugin makes no network connections, including for anything a note references.
+(`node` is used by the test suite only.)
 
 Seven writes to its own entry in `~/.config/omarchy/shell.json`, and only when
 you change a setting. It never edits your Hyprland config: the global shortcut
@@ -165,12 +166,39 @@ omarchy-shell seven append 3 "milk"   # add a line
 omarchy-shell seven capture "idea"    # add to the first empty note, print which
 omarchy-shell seven clear 3
 
-omarchy-shell seven status            # JSON: ready, dir, active note, shortcut, lengths
+omarchy-shell seven status            # JSON: ready, dir, active note, shortcut, panel mode, lengths
 ```
 
 `status` reports shape, not content: which note is active, how many are filled,
-how long each one is, and whether the shortcut registered. It never prints what
+how long each one is, which face the panel is showing, and whether the shortcut
+registered. It never prints what
 you wrote, so it is safe to paste into a bug report.
+
+## Notes are untrusted
+
+A note is not something only you can write. The files are ordinary files any
+local process can put bytes into, `seven append` is reachable by anything that
+can talk to the shell's socket, and a synced directory carries whatever another
+machine wrote. Seven renders notes on that basis.
+
+Qt makes this sharper than it looks. A `Text` with no `textFormat` sniffs its
+own input and renders anything tag-shaped as rich text; rich text and markdown
+both fetch what an image points at. So a note beginning
+`<img src="http://example.com/x">` would have made the shell issue that request
+merely by your hovering the bar — a note that beacons.
+
+- The bar tooltip escapes note text and wraps it in a tag of its own, so the
+  format is settled rather than guessed and there is no markup a note can add.
+- Markdown images are defused before the preview sees them: `![alt](url)`
+  renders as an ordinary link, so the words stay and nothing is fetched until
+  you deliberately click. The preview also holds no text while it is hidden,
+  because a `Text` parses and fetches whether or not it is drawn.
+- A link may only hand `http`, `https`, or `mailto` to `xdg-open`. `file:` and
+  app-registered schemes can open or run things, and a note picks both the
+  label and the target, so you cannot see where one goes before clicking.
+
+`tests/e2e.sh` plants each of these against a local HTTP server and asserts it
+hears nothing.
 
 ## How it works
 
