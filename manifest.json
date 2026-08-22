@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "melonamin.dots",
+  "name": "Dots",
+  "version": "0.1.0",
+  "author": "melonamin",
+  "description": "Seven notes. No titles, no files, no fuss.",
+  "homepage": "https://github.com/melonamin/omarchy-dots",
+  "license": "MIT",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Dots",
+    "description": "Seven scratch notes, always one keystroke away",
+    "category": "Notes",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "monospace": true,
+      "showCounts": true
+    },
+    "schema": [
+      {
+        "key": "monospace",
+        "type": "boolean",
+        "label": "Monospace editor"
+      },
+      {
+        "key": "showCounts",
+        "type": "boolean",
+        "label": "Show word and character counts"
+      }
+    ]
+  }
+}
