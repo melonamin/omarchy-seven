@@ -211,6 +211,28 @@ test("settings are found on the bar layout entry first, then plugins[]", () => {
   assert.equal(model.findSettingsEntry(null, "melonamin.seven"), null)
 })
 
+test("withSetting writes one key without freezing the other defaults in", () => {
+  // Only what the user already set is carried over, so a right click does not
+  // bake monospace/showCounts/shortcut into their shell.json.
+  assert.deepEqual(
+    model.withSetting({ monospace: false }, "melonamin.seven", "colorfulDot", false),
+    { id: "melonamin.seven", monospace: false, colorfulDot: false })
+
+  assert.deepEqual(
+    model.withSetting(null, "melonamin.seven", "colorfulDot", false),
+    { id: "melonamin.seven", colorfulDot: false })
+
+  // A stale id in the incoming settings must not survive.
+  assert.equal(
+    model.withSetting({ id: "stale" }, "melonamin.seven", "colorfulDot", true).id,
+    "melonamin.seven")
+
+  // Toggling twice returns the entry to where it started.
+  const once = model.withSetting({}, "melonamin.seven", "colorfulDot", false)
+  const twice = model.withSetting(once, "melonamin.seven", "colorfulDot", true)
+  assert.equal(model.settingsFromEntry(twice).colorfulDot, true)
+})
+
 test("stepping between dots wraps in both directions", () => {
   assert.equal(model.stepIndex(0, 1), 1)
   assert.equal(model.stepIndex(6, 1), 0)
@@ -252,4 +274,137 @@ test("the manifest declares each kind's entry point and the files exist", () => 
   // shortcut is deliberately absent from the manifest: there is no string
   // control in the settings UI, so it is edited in shell.json by hand.
   assert.ok(!("shortcut" in manifest.barWidget.defaults))
+})
+
+// --------------------------------------------------------------- markdown
+
+// Edit plans are "replace [start,end) with text"; applying one here keeps the
+// assertions about documents rather than about offsets.
+function apply(text, plan) {
+  assert.ok(plan, "expected an edit plan")
+  return text.slice(0, plan.start) + plan.text + text.slice(plan.end)
+}
+
+function pressEnter(text, cursor) {
+  return apply(text, model.newlineEdit(text, cursor))
+}
+
+test("Enter continues a bullet list", () => {
+  assert.equal(pressEnter("- milk", 6), "- milk\n- ")
+  assert.equal(pressEnter("* milk", 6), "* milk\n* ")
+  assert.equal(pressEnter("+ milk", 6), "+ milk\n+ ")
+  // Indentation of a nested item is carried down with it.
+  assert.equal(pressEnter("    - deep", 10), "    - deep\n    - ")
+  assert.equal(pressEnter("\t- tabbed", 9), "\t- tabbed\n\t- ")
+})
+
+test("Enter numbers the next ordered item", () => {
+  assert.equal(pressEnter("1. first", 8), "1. first\n2. ")
+  assert.equal(pressEnter("9. ninth", 8), "9. ninth\n10. ")
+  assert.equal(pressEnter("3) third", 8), "3) third\n4) ")
+  assert.equal(pressEnter("  1. first", 10), "  1. first\n  2. ")
+})
+
+test("Enter on an empty list item ends the list instead of extending it", () => {
+  assert.equal(pressEnter("- ", 2), "")
+  assert.equal(pressEnter("- milk\n- ", 9), "- milk\n")
+  assert.equal(pressEnter("  1. ", 5), "")
+  assert.equal(pressEnter("- [ ] ", 6), "")
+  // The caret lands where the marker was.
+  assert.equal(model.newlineEdit("- milk\n- ", 9).cursorStart, 7)
+})
+
+test("Enter continues a task list unchecked", () => {
+  assert.equal(pressEnter("- [ ] buy stamps", 16), "- [ ] buy stamps\n- [ ] ")
+  // Carrying [x] down would tick a box nobody has done.
+  assert.equal(pressEnter("- [x] done", 10), "- [x] done\n- [ ] ")
+  assert.equal(pressEnter("- [X] done", 10), "- [X] done\n- [ ] ")
+})
+
+test("Enter carries indentation on ordinary lines", () => {
+  assert.equal(pressEnter("    indented", 12), "    indented\n    ")
+  assert.equal(pressEnter("plain", 5), "plain\n")
+  assert.equal(pressEnter("", 0), "\n")
+  // Splitting a line mid-way still carries the indent to the new one.
+  assert.equal(pressEnter("  ab", 3), "  a\n  b")
+})
+
+test("Enter is unfazed by a cursor at either end of the document", () => {
+  assert.equal(pressEnter("- milk", 999), "- milk\n- ")
+  assert.equal(pressEnter("- milk", -5), "\n- milk")
+})
+
+test("Enter before the marker opens a line above instead of adding a bullet", () => {
+  // Caret at the very start of "- milk".
+  assert.equal(pressEnter("- milk", 0), "\n- milk")
+  // Caret inside the marker itself.
+  assert.equal(pressEnter("- milk", 1), "-\n milk")
+  assert.equal(pressEnter("- ", 0), "\n- ")
+  // Indentation the caret has not reached yet stays with the text below.
+  assert.equal(pressEnter("    - deep", 2), "  \n  - deep")
+})
+
+test("bold, italic, and strikethrough wrap a selection", () => {
+  assert.equal(apply("bold", model.toggleWrap("bold", 0, 4, "**")), "**bold**")
+  assert.equal(apply("it", model.toggleWrap("it", 0, 2, "*")), "*it*")
+  assert.equal(apply("gone", model.toggleWrap("gone", 0, 4, "~~")), "~~gone~~")
+  // The words stay selected so a second shortcut can stack on the first.
+  const plan = model.toggleWrap("say bold now", 4, 8, "**")
+  assert.equal(apply("say bold now", plan), "say **bold** now")
+  assert.equal(plan.cursorStart, 6)
+  assert.equal(plan.cursorEnd, 10)
+})
+
+test("the same shortcut unwraps text it already wrapped", () => {
+  // Markers just outside the selection.
+  assert.equal(apply("**bold**", model.toggleWrap("**bold**", 2, 6, "**")), "bold")
+  // Markers inside the selection.
+  assert.equal(apply("**bold**", model.toggleWrap("**bold**", 0, 8, "**")), "bold")
+  assert.equal(apply("~~gone~~", model.toggleWrap("~~gone~~", 2, 6, "~~")), "gone")
+  assert.equal(apply("a *it* b", model.toggleWrap("a *it* b", 3, 5, "*")), "a it b")
+})
+
+test("italic does not cannibalise a bold pair", () => {
+  // Ctrl+I inside **bold** must add italics, not strip one asterisk a side.
+  assert.equal(apply("**bold**", model.toggleWrap("**bold**", 2, 6, "*")), "***bold***")
+})
+
+test("wrapping with no selection leaves the caret between the markers", () => {
+  const plan = model.toggleWrap("ab", 1, 1, "**")
+  assert.equal(apply("ab", plan), "a****b")
+  assert.equal(plan.cursorStart, 3)
+  assert.equal(plan.cursorEnd, 3)
+})
+
+test("a backwards selection wraps the same as a forwards one", () => {
+  assert.equal(apply("bold", model.toggleWrap("bold", 4, 0, "**")), "**bold**")
+})
+
+test("headings are set, replaced, and toggled off", () => {
+  assert.equal(apply("title", model.toggleHeading("title", 0, 2)), "## title")
+  assert.equal(apply("## title", model.toggleHeading("## title", 4, 3)), "### title")
+  // The level a line already has toggles it off.
+  assert.equal(apply("## title", model.toggleHeading("## title", 4, 2)), "title")
+  // Level 0 always clears.
+  assert.equal(apply("### title", model.toggleHeading("### title", 5, 0)), "title")
+  assert.equal(apply("title", model.toggleHeading("title", 0, 0)), "title")
+  // Levels are capped at markdown's six.
+  assert.equal(apply("title", model.toggleHeading("title", 0, 9)), "###### title")
+})
+
+test("headings act on the line the cursor is in, and keep its indentation", () => {
+  const doc = "first\nsecond\nthird"
+  assert.equal(apply(doc, model.toggleHeading(doc, 8, 1)), "first\n# second\nthird")
+  assert.equal(apply("  note", model.toggleHeading("  note", 4, 1)), "  # note")
+  assert.equal(apply("  # note", model.toggleHeading("  # note", 6, 1)), "  note")
+})
+
+test("the caret follows the words when a heading prefix changes width", () => {
+  // Caret on "t" of title (index 3); adding "## " shifts it right by three.
+  assert.equal(model.toggleHeading("title", 3, 2).cursorStart, 6)
+  // Removing the prefix shifts it back.
+  assert.equal(model.toggleHeading("## title", 6, 2).cursorStart, 3)
+  // A caret inside the hashes is pushed to the start of the words, never
+  // stranded in the middle of the marker.
+  assert.equal(model.toggleHeading("title", 0, 2).cursorStart, 3)
 })

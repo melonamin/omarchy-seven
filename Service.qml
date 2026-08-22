@@ -58,7 +58,11 @@ Item {
   // IPC append, clear). Panels watch this to resync an unfocused editor.
   property int revision: 0
 
-  signal dotChangedExternally(int index)
+  // `fromDisk` separates the two ways a dot can change under the panel. A file
+  // watcher firing mid-keystroke must not yank text away from the caret; an
+  // explicit `clear`/`append` over IPC is a deliberate instruction and has to
+  // land even while somebody is typing, or the command silently does nothing.
+  signal dotChangedExternally(int index, bool fromDisk)
 
   function textAt(index) {
     return String(texts[SevenModel.clampIndex(index)] || "")
@@ -94,14 +98,14 @@ Item {
     var slot = SevenModel.clampIndex(index)
     setText(slot, SevenModel.appendText(textAt(slot), addition))
     revision++
-    dotChangedExternally(slot)
+    dotChangedExternally(slot, false)
   }
 
   function clearDot(index) {
     var slot = SevenModel.clampIndex(index)
     setText(slot, "")
     revision++
-    dotChangedExternally(slot)
+    dotChangedExternally(slot, false)
   }
 
   // Where unaddressed text goes: the first empty dot, matching Tot.
@@ -151,7 +155,7 @@ Item {
     next[slot] = value.replace(/\n$/, "")
     texts = next
     revision++
-    dotChangedExternally(slot)
+    dotChangedExternally(slot, true)
   }
 
   Component.onCompleted: {
@@ -416,6 +420,7 @@ Item {
         active: root.activeIndex + 1,
         filled: root.filledCount,
         shortcut: root.requestedShortcut,
+        colorfulDot: root.settings.colorfulDot,
         shortcutRegistered: root.shortcutRegistered,
         diagnostic: root.shortcutDiagnostic,
         counts: root.texts.map(function(value) { return String(value || "").length })

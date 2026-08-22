@@ -262,6 +262,19 @@ function shortcutState(bindings, shortcut, description) {
   return { found: found, collision: collision }
 }
 
+// Build the inline shell.json entry for this widget with one setting changed.
+// Only keys the user already has are carried over, so toggling one thing does
+// not freeze every other default into their config file.
+function withSetting(settings, moduleName, key, value) {
+  var entry = { id: String(moduleName) }
+  var source = settings && typeof settings === "object" ? settings : {}
+  for (var name in source) {
+    if (name !== "id") entry[name] = source[name]
+  }
+  entry[String(key)] = value
+  return entry
+}
+
 function settingsFromEntry(entry) {
   var source = entry && typeof entry === "object" ? entry : {}
   // An absent shortcut means "use the default"; an explicit empty string means
@@ -289,6 +302,158 @@ function stepIndex(activeIndex, delta) {
   return next
 }
 
+// ---------------------------------------------------------------- markdown
+//
+// Small editing affordances for the editor. Every one of these returns an
+// "edit plan" -- replace [start, end) with `text`, then put the selection at
+// [cursorStart, cursorEnd) -- rather than a whole new document, so the editor
+// can apply it through TextArea.remove/insert and keep its undo history.
+
+function clampPos(pos, length) {
+  var value = Math.floor(Number(pos))
+  if (isNaN(value) || value < 0) return 0
+  return value > length ? length : value
+}
+
+function lineStartOf(text, pos) {
+  var index = text.lastIndexOf("\n", pos - 1)
+  return index < 0 ? 0 : index + 1
+}
+
+function lineEndOf(text, pos) {
+  var index = text.indexOf("\n", pos)
+  return index < 0 ? text.length : index
+}
+
+function edit(start, end, text, cursorStart, cursorEnd) {
+  return {
+    start: start,
+    end: end,
+    text: text,
+    cursorStart: cursorStart,
+    cursorEnd: cursorEnd === undefined ? cursorStart : cursorEnd
+  }
+}
+
+// Indent, then either a bullet or a number, then whitespace, then an optional
+// task box. Kept as one expression so the pieces stay aligned with the group
+// numbers used below.
+var LIST_MARKER = /^([ \t]*)(?:([-*+])|(\d+)([.)]))([ \t]+)(\[[ xX]\][ \t]+)?/
+
+// What Enter should do. Inside a list it writes the next marker; on an empty
+// list item it takes the marker away instead of making another one; anywhere
+// else it carries the current indentation down, which is the whole reason
+// nested lists survive being typed.
+function newlineEdit(text, cursor) {
+  var value = string(text)
+  var pos = clampPos(cursor, value.length)
+  var lineStart = lineStartOf(value, pos)
+  var line = value.slice(lineStart, lineEndOf(value, pos))
+  var match = LIST_MARKER.exec(line)
+
+  // Only continue the list when the caret is past the marker. With the caret
+  // sitting before or inside "- ", Enter means "push this item down and open a
+  // line above it", not "start another bullet".
+  if (match && pos >= lineStart + match[0].length) {
+    var prefixLength = match[0].length
+    if (line.slice(prefixLength).trim() === "") {
+      // "- " with nothing after it means the list is finished. Clearing the
+      // marker is what every editor does here, and it leaves Enter free to
+      // make a blank line on the next press.
+      return edit(lineStart, lineStart + prefixLength, "", lineStart)
+    }
+    var indent = match[1]
+    var marker = match[2]
+      ? match[2] + match[5]
+      : String(Number(match[3]) + 1) + match[4] + match[5]
+    // A continued task item starts unchecked; carrying [x] down would tick a
+    // box nobody has done yet.
+    var box = match[6] ? "[ ] " : ""
+    var inserted = "\n" + indent + marker + box
+    return edit(pos, pos, inserted, pos + inserted.length)
+  }
+
+  // Same reasoning for plain lines: indentation the caret has not reached yet
+  // is still ahead of it and stays with the text being pushed down.
+  var indentOnly = /^[ \t]*/.exec(line)
+  var indent = indentOnly ? indentOnly[0] : ""
+  var carried = pos >= lineStart + indent.length ? "\n" + indent : "\n"
+  return edit(pos, pos, carried, pos + carried.length)
+}
+
+// Wrap the selection in `marker`, or unwrap it if it is already wrapped --
+// whether the markers sit just outside the selection or inside it. With no
+// selection it drops in an empty pair and puts the caret between the halves.
+function toggleWrap(text, selectionStart, selectionEnd, marker) {
+  var value = string(text)
+  var mark = string(marker)
+  var width = mark.length
+  if (width === 0) return null
+
+  var from = clampPos(selectionStart, value.length)
+  var to = clampPos(selectionEnd, value.length)
+  if (to < from) {
+    var swap = from
+    from = to
+    to = swap
+  }
+
+  // "*" must not treat the inner half of a "**" pair as its own marker, or
+  // asking for italics inside bold text would quietly demote it to italics.
+  var boldGuard = mark === "*" && (value.slice(from - 2, from) === "**" || value.slice(to, to + 2) === "**")
+
+  if (!boldGuard && from >= width && value.slice(from - width, from) === mark
+      && value.slice(to, to + width) === mark) {
+    var inner = value.slice(from, to)
+    return edit(from - width, to + width, inner, from - width, from - width + inner.length)
+  }
+
+  var selected = value.slice(from, to)
+  if (!boldGuard && selected.length >= width * 2
+      && selected.slice(0, width) === mark && selected.slice(-width) === mark) {
+    var stripped = selected.slice(width, selected.length - width)
+    return edit(from, to, stripped, from, from + stripped.length)
+  }
+
+  if (from === to) {
+    return edit(from, from, mark + mark, from + width)
+  }
+
+  var wrapped = mark + selected + mark
+  return edit(from, to, wrapped, from + width, from + width + selected.length)
+}
+
+var HEADING = /^([ \t]*)(#{1,6})([ \t]+)/
+
+// Set the current line's heading level. Asking for the level it already has
+// removes it, so the same key toggles both ways; level 0 always clears.
+function toggleHeading(text, cursor, level) {
+  var value = string(text)
+  var pos = clampPos(cursor, value.length)
+  var lineStart = lineStartOf(value, pos)
+  var line = value.slice(lineStart, lineEndOf(value, pos))
+  var match = HEADING.exec(line)
+
+  var indent = match ? match[1] : /^[ \t]*/.exec(line)[0]
+  var current = match ? match[2].length : 0
+  var oldPrefix = match ? match[0].length : indent.length
+
+  var wanted = Math.floor(Number(level))
+  if (isNaN(wanted) || wanted < 0) wanted = 0
+  if (wanted > 6) wanted = 6
+
+  var newPrefix = indent
+  if (wanted !== 0 && wanted !== current) {
+    for (var i = 0; i < wanted; i++) newPrefix += "#"
+    newPrefix += " "
+  }
+
+  // Keep the caret where it was relative to the words, not to the hashes.
+  var shifted = pos + (newPrefix.length - oldPrefix)
+  var floor = lineStart + newPrefix.length
+  return edit(lineStart, lineStart + oldPrefix, newPrefix, shifted < floor ? floor : shifted)
+}
+
 // Node's test runner imports this file; Quickshell just evaluates it.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
@@ -314,6 +479,12 @@ if (typeof module !== "undefined" && module.exports) {
     appendText: appendText,
     normalize: normalize,
     settingsFromEntry: settingsFromEntry,
+    withSetting: withSetting,
+    newlineEdit: newlineEdit,
+    toggleWrap: toggleWrap,
+    toggleHeading: toggleHeading,
+    lineStartOf: lineStartOf,
+    lineEndOf: lineEndOf,
     normalizeShortcut: normalizeShortcut,
     shortcutChord: shortcutChord,
     findSettingsEntry: findSettingsEntry,

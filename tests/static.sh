@@ -103,6 +103,37 @@ grep -q 'useActiveColor: !root.config.colorfulDot' "$root_dir/Panel.qml" \
   || fail "the coloured bar dot must opt out of the bar's active tint"
 pass "a coloured bar dot keeps its hue while the panel is open"
 
+# Right click swaps the dot's presentation and persists it; without the
+# updateEntryInline call the change would evaporate on the next shell restart.
+grep -q 'Qt.RightButton) root.toggleDotStyle()' "$root_dir/Panel.qml" \
+  || fail "right click is not wired to the dot-style toggle"
+grep -q 'updateEntryInline' "$root_dir/Panel.qml" \
+  || fail "the dot-style toggle does not persist to shell.json"
+pass "right click toggles the dot style and persists it"
+
+# The markdown affordances live in the model as pure edit plans; the editor
+# only applies them. Keeping the logic out of QML is what makes it testable.
+for helper in newlineEdit toggleWrap toggleHeading; do
+  grep -q "function $helper" "$root_dir/SevenModel.js" || fail "SevenModel.js has no $helper"
+  grep -q "SevenModel.$helper" "$root_dir/components/DotEditor.qml" \
+    || fail "DotEditor.qml does not use SevenModel.$helper"
+done
+pass "list continuation, wrapping, and headings come from the model"
+
+# Edits go through remove/insert so Ctrl+Z still works; reassigning `text`
+# would flatten the whole note into one undo step.
+grep -q 'area.remove' "$root_dir/components/DotEditor.qml" \
+  || fail "edits must be applied through TextArea.remove/insert to keep undo"
+grep -q 'area.insert' "$root_dir/components/DotEditor.qml" \
+  || fail "edits must be applied through TextArea.remove/insert to keep undo"
+pass "markdown edits preserve the editor's undo history"
+
+# Focus must follow visibility; a forceActiveFocus pushed in from the panel
+# races the visible binding and silently does nothing.
+grep -q 'onVisibleChanged: if (visible)' "$root_dir/components/DotEditor.qml" \
+  || fail "the editor must take focus when it becomes visible"
+pass "the editor takes focus when it becomes visible"
+
 # --- hygiene ------------------------------------------------------------------
 
 link=$(find "$root_dir" -name .git -prune -o -type l -print -quit)

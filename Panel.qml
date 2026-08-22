@@ -64,6 +64,15 @@ Panel {
     editor.text = root.service ? root.service.textAt(root.service.activeIndex) : ""
   }
 
+  // Refill the editor without throwing the caret back to the top. Used when a
+  // dot is rewritten under an open panel, where the text is new but the writer
+  // is still where they were.
+  function reloadKeepingCaret() {
+    var caret = editor.editorItem.cursorPosition
+    loadActiveIntoEditor()
+    editor.editorItem.cursorPosition = Math.min(caret, editor.editorItem.length)
+  }
+
   function focusActiveSurface() {
     if (root.previewing) keyCatcher.forceActiveFocus()
     else editor.focusAtEnd()
@@ -71,6 +80,16 @@ Panel {
 
   function togglePreview() {
     previewing = !previewing
+  }
+
+  // Flip the bar dot between its two presentations and remember the choice.
+  // Applied locally first so the dot changes on the click itself; the write to
+  // shell.json comes back through the bar as the same value.
+  function toggleDotStyle() {
+    var entry = SevenModel.withSetting(root.settings, root.moduleName, "colorfulDot", !root.config.colorfulDot)
+    root.settings = entry
+    if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
+      bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
   onOpenedChanged: {
@@ -92,17 +111,23 @@ Panel {
 
   onPreviewingChanged: if (opened) Qt.callLater(focusActiveSurface)
 
-  // A dot edited on disk or through IPC. Adopt it unless the user is typing
-  // into that very dot right now, in which case the service already kept our
-  // copy and this panel is the one holding it.
+  // A dot rewritten out from under the panel.
+  //
+  // From disk, mid-typing, the editor's copy is the newer one and the service
+  // has already kept it -- adopting the file here would delete the sentence
+  // being written. From IPC it is the other way round: the service holds what
+  // was just asked for, and ignoring it would make `seven clear 3` look broken
+  // whenever the panel happened to be open.
   Connections {
     target: root.service
     ignoreUnknownSignals: true
 
-    function onDotChangedExternally(index) {
+    function onDotChangedExternally(index, fromDisk) {
       if (index !== root.activeIndex) return
-      if (root.opened && !root.previewing && editor.editorItem.activeFocus) return
-      root.loadActiveIntoEditor()
+      var typingHere = root.opened && !root.previewing && editor.editorItem.activeFocus
+      if (fromDisk && typingHere) return
+      if (typingHere) root.reloadKeepingCaret()
+      else root.loadActiveIntoEditor()
     }
   }
 
@@ -127,11 +152,16 @@ Panel {
     tooltipText: SevenModel.tooltipFor(root.service ? root.service.texts : [], root.activeIndex)
 
     onPressed: function(b) {
-      if (b === Qt.RightButton) root.stepDot(1)
-      else if (b === Qt.MiddleButton) root.stepDot(-1)
+      // Right click swaps the dot's presentation. It is the one setting whose
+      // effect is entirely visible in the bar, so the bar is where it belongs
+      // -- and clicking again puts it back.
+      if (b === Qt.RightButton) root.toggleDotStyle()
+      else if (b === Qt.MiddleButton) root.stepDot(1)
       else root.toggle()
     }
 
+    // Both directions live on the wheel, which is why stepping does not need a
+    // second mouse button of its own.
     onWheelMoved: function(delta) { root.stepDot(delta > 0 ? -1 : 1) }
   }
 

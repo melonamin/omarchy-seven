@@ -20,10 +20,12 @@ affiliated with or endorsed by The Iconfactory.
 - **One key away.** `SUPER + CTRL + J` opens it from anywhere and closes it
   again. The editor takes focus immediately, with the caret at the end of what
   you last wrote, on the dot you were last using.
-- **Markdown when you want it.** `Alt + P` flips the current dot between its
-  plain source and a rendered preview. Rendering is Qt's own Markdown support,
-  so headings, lists, task lists, and links all work and there is no parser
-  here to disagree with CommonMark.
+- **Markdown when you want it.** Lists continue themselves, indentation is
+  carried down, and `Ctrl + B` / `Ctrl + I` / `Ctrl + 1`…`6` do what they do
+  everywhere else. `Alt + P` flips the current dot between its plain source and
+  a rendered preview. Rendering is Qt's own Markdown support, so headings,
+  lists, task lists, and links all work and there is no parser here to disagree
+  with CommonMark.
 - **Plain files, plainly named.** Each dot is a `.md` file in one directory.
   `grep` them, open them in `nvim`, sync them with Syncthing, put them in git.
   Edits made outside the panel show up in it live.
@@ -62,14 +64,39 @@ were last using, ready to type.
 | `Alt` + `←` / `→` | Previous / next dot, wrapping |
 | `Alt` + `P` | Flip between the editor and the rendered preview |
 | `Esc` | Close the panel |
-| `Tab` | Just a tab. It indents, so nested markdown lists work |
 
 In the preview, `1`…`7` and the bare arrow keys move between dots. Letters do
 nothing there — a key press while you are reading should never move you to a
 different note.
 
-On the bar dot itself: left click opens, right click steps to the next dot,
-middle click steps back, and the scroll wheel walks the row.
+On the bar dot itself: left click opens, **right click switches the dot between
+its coloured and plain presentations**, middle click steps to the next note, and
+the scroll wheel walks the row.
+
+## Writing markdown
+
+The editor knows just enough markdown to stay out of your way. Everything below
+is an ordinary edit — `Ctrl + Z` undoes it.
+
+| Key | Does |
+| --- | --- |
+| `Enter` | Continues the list you are in, numbering ordered items and leaving task boxes unchecked |
+| `Enter` on an empty item | Ends the list and takes the marker away |
+| `Shift` + `Enter` | A plain newline, with none of the above |
+| `Tab` | Just a tab. It indents, so nested lists work |
+| `Ctrl` + `B` | Bold. Again on bold text removes it |
+| `Ctrl` + `I` | Italic |
+| `Ctrl` + `Shift` + `X` | Strikethrough |
+| `Ctrl` + `1`…`6` | Make the line a heading of that level; the same key again clears it |
+| `Ctrl` + `0` | Clear the heading |
+
+Enter only continues a list when the caret is past the marker. With the caret
+before it, Enter opens a line above, which is how you get a blank line in front
+of a list you have already written.
+
+The wrapping keys work on a selection, and leave it selected so you can stack
+them. With nothing selected they drop in an empty pair and put the caret in the
+middle.
 
 ## Settings
 
@@ -102,7 +129,8 @@ UI writes them:
   `- [x] coffee` each read as one word.
 - `colorfulDot` — on, the bar dot takes the active note's colour and goes
   hollow when that note is empty. Off, it is a plain solid dot in the bar's own
-  foreground, indistinguishable from every other item up there.
+  foreground, indistinguishable from every other item up there. Right-clicking
+  the dot switches between the two and writes the choice here.
 - `shortcut` — the global chord. Written in any of `SUPER + CTRL + J`,
   `SUPER+CTRL+J`, or `super, ctrl, j`. Set it to `""` to have no global
   shortcut at all. Omitting the key entirely keeps the default.
@@ -162,7 +190,7 @@ omarchy-shell seven append 3 "milk"   # add a line to dot 3
 omarchy-shell seven capture "idea"    # add to the first empty dot, print which
 omarchy-shell seven clear 3           # empty dot 3
 
-omarchy-shell seven status            # JSON: ready, dir, active dot, shortcut, lengths
+omarchy-shell seven status            # JSON: ready, dir, active dot, shortcut, dot style, lengths
 ```
 
 `status` reports shape, not content: which dot is active, how many are filled,
@@ -186,7 +214,8 @@ tests/integration.sh   # IPC round trips, writes to disk, external edits
 tests/e2e.sh           # drives the real panel with wtype
 ```
 
-`tests/e2e.sh` takes over the keyboard for a few seconds. Run it when you are
+`tests/e2e.sh` takes over the keyboard and, where `dotool` and Pillow are
+installed, the pointer for a few seconds. Run it when you are
 not mid-sentence somewhere else. It cannot press the global shortcut — synthetic
 keys from a virtual keyboard do not trigger Hyprland's compositor-level binds —
 so it checks that the bind is registered on the right chord, that nothing else

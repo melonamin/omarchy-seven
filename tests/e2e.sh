@@ -14,8 +14,21 @@ root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 fail() { printf '\033[1;31mFAIL\033[0m %s\n' "$1" >&2; exit 1; }
 pass() { printf '\033[1;32mok\033[0m   %s\n' "$1"; }
+skip() { printf '\033[1;33mskip\033[0m %s\n' "$1"; }
 
 json_get() { python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1" 2>/dev/null; }
+
+# Clearing travels IPC -> service -> panel reload. Waiting for the result beats
+# guessing a sleep, and keeps the typing that follows from racing the reload.
+await_empty() {
+  local dot="$1" _
+  omarchy-shell -q seven clear "$dot" >/dev/null
+  for _ in 1 2 3 4 5 6 7 8; do
+    sleep 0.3
+    [[ -z $(omarchy-shell seven read "$dot") ]] && return 0
+  done
+  return 1
+}
 
 command -v omarchy-shell >/dev/null || fail "omarchy-shell not found"
 command -v wtype >/dev/null || fail "wtype not found (required to drive the keyboard)"
@@ -44,12 +57,30 @@ dots_dir=$(json_get dir <<<"$status")
 # --- snapshot and restore -----------------------------------------------------
 
 backup=$(mktemp -d)
+entry_backup=""
 restore() {
   omarchy-shell seven close >/dev/null 2>&1 || true
   local n
   for n in 1 2 3 4 5 6 7; do
     if [[ -f "$backup/$n.md" ]]; then cp "$backup/$n.md" "$dots_dir/$n.md"; else rm -f "$dots_dir/$n.md"; fi
   done
+  # Put this widget's shell.json entry back exactly as it was; the right-click
+  # test writes a setting into it.
+  if [[ -n $entry_backup && -f $entry_backup ]]; then
+    python3 - "$entry_backup" <<'RESTORE'
+import json, pathlib, sys
+saved = json.loads(pathlib.Path(sys.argv[1]).read_text())
+path = pathlib.Path.home() / ".config/omarchy/shell.json"
+config = json.loads(path.read_text())
+for section in config.get("bar", {}).get("layout", {}).values():
+    for item in section:
+        if item.get("id") == "melonamin.seven":
+            item.clear()
+            item.update(saved)
+path.write_text(json.dumps(config, indent=2) + "\n")
+RESTORE
+    rm -f "$entry_backup"
+  fi
   sleep 1
   rm -rf "$backup"
 }
@@ -139,6 +170,66 @@ sleep 1
 panel_open && fail "Escape did not close the panel"
 pass "Escape closes the panel"
 
+# --- markdown editing affordances -------------------------------------------
+
+omarchy-shell -q seven clear 7 >/dev/null
+omarchy-shell -q seven show 7 >/dev/null
+sleep 1.5
+await_empty 7 || fail "dot 7 did not start empty"
+
+# `--` because wtype reads a leading dash as one of its own options.
+wtype -- "- milk"; sleep 0.3
+wtype -k Return;   sleep 0.3
+wtype "eggs";      sleep 0.3
+wtype -k Return;   sleep 0.3
+wtype "bread";     sleep 1.2
+[[ $(omarchy-shell seven read 7) == $'- milk\n- eggs\n- bread' ]] \
+  || fail "Enter did not continue the bullet list, got: $(printf '%q' "$(omarchy-shell seven read 7)")"
+pass "Enter continues a bullet list"
+
+# Enter on the marker-only line it just made must end the list, not extend it.
+wtype -k Return; sleep 0.4
+wtype -k Return; sleep 0.4
+wtype "plain";   sleep 1.2
+[[ $(omarchy-shell seven read 7) == $'- milk\n- eggs\n- bread\nplain' ]] \
+  || fail "Enter on an empty list item did not end the list, got: $(printf '%q' "$(omarchy-shell seven read 7)")"
+pass "Enter on an empty list item ends the list"
+
+await_empty 7 || fail "clear did not empty dot 7"
+wtype "bold"; sleep 0.6
+wtype -M ctrl -k a -m ctrl; sleep 0.4
+wtype -M ctrl -k b -m ctrl; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "**bold**" ]] || fail "Ctrl+B did not bold the selection"
+pass "Ctrl+B wraps the selection in bold"
+
+wtype -M ctrl -k b -m ctrl; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "bold" ]] || fail "Ctrl+B did not unbold"
+pass "Ctrl+B on bold text unwraps it"
+
+wtype -M ctrl -k i -m ctrl; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "*bold*" ]] || fail "Ctrl+I did not italicise"
+wtype -M ctrl -k i -m ctrl; sleep 1.2
+
+wtype -M ctrl -M shift -k x -m shift -m ctrl; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "~~bold~~" ]] || fail "Ctrl+Shift+X did not strike through"
+wtype -M ctrl -M shift -k x -m shift -m ctrl; sleep 1.2
+pass "Ctrl+I and Ctrl+Shift+X wrap and unwrap too"
+
+wtype -M ctrl -k 2 -m ctrl; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "## bold" ]] || fail "Ctrl+2 did not set a heading"
+pass "Ctrl+2 makes the line a heading"
+
+wtype -M ctrl -k 2 -m ctrl; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "bold" ]] || fail "Ctrl+2 did not toggle the heading back off"
+pass "the same heading key toggles it off"
+
+# A deliberate instruction must land even while the editor holds focus.
+await_empty 7 || fail "clear was ignored while the panel had focus"
+pass "clear reaches a dot whose editor is focused"
+
+omarchy-shell -q seven close >/dev/null 2>&1 || true
+sleep 1
+
 # --- the global shortcut ---------------------------------------------------
 #
 # wtype cannot exercise this: synthetic keys from a virtual keyboard do not
@@ -189,5 +280,82 @@ final=$(omarchy-shell seven read 5)
 [[ $final == "note five again"* && $final == *"indented" ]] \
   || fail "text was lost when the panel closed, got: $(printf '%q' "$final")"
 pass "notes survive the panel closing"
+
+# --- right click swaps the bar dot's presentation ---------------------------
+
+style=$(json_get colorfulDot <<<"$(omarchy-shell seven status)")
+if ! command -v dotool >/dev/null || ! python3 -c 'import PIL' 2>/dev/null; then
+  skip "right-click test needs dotool and python-pillow"
+elif [[ $style != True ]]; then
+  skip "right-click test needs colorfulDot on, to find the dot by its colour"
+else
+  entry_backup=$(mktemp)
+  python3 - "$entry_backup" <<'SAVE'
+import json, pathlib, sys
+config = json.loads((pathlib.Path.home() / ".config/omarchy/shell.json").read_text())
+for section in config.get("bar", {}).get("layout", {}).values():
+    for item in section:
+        if item.get("id") == "melonamin.seven":
+            pathlib.Path(sys.argv[1]).write_text(json.dumps(item))
+SAVE
+
+  # A filled, active dot paints the bar dot in that note's colour, which is how
+  # the pointer finds it on screen.
+  omarchy-shell -q seven append 1 "anchor" >/dev/null
+  omarchy-shell -q seven show 1 >/dev/null; sleep 1
+  omarchy-shell -q seven close >/dev/null; sleep 1.2
+
+  shot=$(mktemp --suffix=.png)
+  grim "$shot"
+  spot=$(python3 - "$shot" <<'FIND'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB")
+W, H = im.size
+px = im.load()
+target = (0xe5, 0x53, 0x4b)   # dot 1's colour
+pts = [(x, y) for y in range(0, 56) for x in range(W)
+       if all(abs(px[x, y][i] - target[i]) < 10 for i in range(3))]
+if not pts:
+    sys.exit(1)
+print(sum(p[0] for p in pts) / len(pts) / W, sum(p[1] for p in pts) / len(pts) / H)
+FIND
+  ) || fail "could not find the bar dot on screen"
+  rm -f "$shot"
+  pass "located the bar dot at $spot"
+
+  cursor_before=$(hyprctl cursorpos)
+  printf 'mouseto %s\n' "$spot" | dotool; sleep 0.5
+  printf 'click right\n' | dotool; sleep 1.5
+  [[ $(json_get colorfulDot <<<"$(omarchy-shell seven status)") == False ]] \
+    || fail "right click did not switch the bar dot to its plain presentation"
+  pass "right click switches the bar dot to a plain solid dot"
+
+  printf 'click right\n' | dotool; sleep 1.5
+  [[ $(json_get colorfulDot <<<"$(omarchy-shell seven status)") == True ]] \
+    || fail "right click did not switch the bar dot back"
+  pass "right click switches it back"
+
+  # The choice has to survive in shell.json, not just in the running widget.
+  python3 -c '
+import json, pathlib, sys
+config = json.loads((pathlib.Path.home() / ".config/omarchy/shell.json").read_text())
+found = [i for s in config["bar"]["layout"].values() for i in s if i.get("id") == "melonamin.seven"]
+sys.exit(0 if found and "colorfulDot" in found[0] else 1)
+' || fail "the dot style was not written to shell.json"
+  pass "the choice is persisted to shell.json"
+
+  # Put the pointer back. cursorpos is logical; mouseto takes output fractions.
+  python3 - "$cursor_before" <<'CURSOR' | dotool
+import json, subprocess, sys
+x, y = (int(v.strip()) for v in sys.argv[1].split(","))
+monitor = json.loads(subprocess.run(["hyprctl", "monitors", "-j"],
+                                    capture_output=True, text=True).stdout)[0]
+scale = float(monitor.get("scale", 1.0))
+print(f"mouseto {x / (monitor['width'] / scale)} {y / (monitor['height'] / scale)}")
+CURSOR
+  sleep 0.3
+  pass "pointer restored"
+fi
 
 printf '\n\033[1;32mend-to-end passed\033[0m\n'
