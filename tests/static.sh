@@ -88,14 +88,29 @@ grep -q 'description = DESCRIPTION' "$root_dir/hypr/seven.lua" \
   || fail "the bind must carry a description or it will not appear in the SUPER+K menu"
 pass "the runtime shortcut is wired to hypr/seven.lua with a description"
 
-# Tab is an editing key again. If it ever goes back to toggling the preview,
-# indenting a markdown list becomes impossible.
-if grep -qE 'Qt\.Key_(Tab|Backtab)' "$root_dir/Panel.qml" "$root_dir/components/DotEditor.qml"; then
-  fail "Tab is bound in the panel; it should stay an ordinary editing key"
-fi
+# Tab indents. If it ever goes back to toggling the preview, indenting a
+# markdown list becomes impossible.
+grep -qE 'Qt\.Key_(Tab|Backtab)' "$root_dir/Panel.qml" \
+  && fail "Tab is bound in the panel; it belongs to the editor"
+grep -q 'Qt.Key_Tab' "$root_dir/components/DotEditor.qml" \
+  || fail "Tab is not bound in the editor"
+grep -q 'SevenModel.tabEdit' "$root_dir/components/DotEditor.qml" \
+  || fail "Tab must insert spaces through SevenModel.tabEdit, not a literal tab"
 grep -q 'Qt.Key_P' "$root_dir/components/DotEditor.qml" || fail "Alt+P is not bound in the editor"
 grep -q 'Qt.Key_P' "$root_dir/Panel.qml" || fail "Alt+P is not bound in the preview"
-pass "Alt+P toggles the preview and Tab is left to the editor"
+pass "Alt+P toggles the preview and Tab indents"
+
+# The cheat sheet is the discoverability surface now that the footer no longer
+# spells three keys out, so it has to be reachable by both mouse and keyboard.
+grep -q 'ShortcutSheet' "$root_dir/Panel.qml" || fail "Panel.qml does not show the cheat sheet"
+grep -q 'root.toggleHelp()' "$root_dir/Panel.qml" || fail "nothing opens the cheat sheet"
+grep -q 'Qt.Key_F1' "$root_dir/Panel.qml" || fail "F1 does not open the cheat sheet from the preview"
+grep -q 'Qt.Key_F1' "$root_dir/components/DotEditor.qml" || fail "F1 does not open the cheat sheet from the editor"
+grep -q 'SevenModel.shortcutSheet' "$root_dir/Panel.qml" \
+  || fail "the sheet must be built from SevenModel.shortcutSheet"
+grep -q 'onClicked: root.toggleHelp()' "$root_dir/Panel.qml" \
+  || fail "the ? button is not wired to the cheat sheet"
+pass "the cheat sheet opens from the ? button, F1, and is built from the model"
 
 # Without this, the bar repaints the dot in the urgent colour whenever the panel
 # is open, which erases the note colour exactly when you are looking at it.

@@ -408,3 +408,77 @@ test("the caret follows the words when a heading prefix changes width", () => {
   // stranded in the middle of the marker.
   assert.equal(model.toggleHeading("title", 0, 2).cursorStart, 3)
 })
+
+test("Tab inserts four spaces, replacing any selection", () => {
+  assert.equal(model.TAB_WIDTH, 4)
+  assert.equal(apply("ab", model.tabEdit("ab", 2, 2)), "ab    ")
+  assert.equal(model.tabEdit("ab", 2, 2).cursorStart, 6)
+  // A selection is replaced, not indented around.
+  assert.equal(apply("a12b", model.tabEdit("a12b", 1, 3)), "a    b")
+  // Backwards selections behave the same.
+  assert.equal(apply("a12b", model.tabEdit("a12b", 3, 1)), "a    b")
+  assert.equal(apply("", model.tabEdit("", 0, 0)), "    ")
+})
+
+test("shortcuts are written for people on the sheet", () => {
+  assert.equal(model.prettyShortcut("SUPER + CTRL + J"), "Super + Ctrl + J")
+  assert.equal(model.prettyShortcut("super,alt,m"), "Super + Alt + M")
+  assert.equal(model.prettyShortcut(""), "")
+})
+
+test("the sheet shows the shortcut that is actually configured", () => {
+  const sheet = model.shortcutSheet("SUPER + ALT + M")
+  assert.equal(sheet.left[0].items[0].keys, "Super + Alt + M")
+  // With no global binding the row says so rather than showing a blank.
+  assert.equal(model.shortcutSheet("").left[0].items[0].keys, "not set")
+})
+
+test("the sheet is well formed and covers both columns", () => {
+  const sheet = model.shortcutSheet("SUPER + CTRL + J")
+  assert.ok(sheet.left.length > 0 && sheet.right.length > 0)
+  for (const group of [...sheet.left, ...sheet.right]) {
+    assert.ok(group.title, "every group needs a title")
+    assert.ok(group.items.length > 0, `${group.title} has no rows`)
+    for (const item of group.items) {
+      assert.ok(item.keys, `a row in ${group.title} has no keys`)
+      assert.ok(item.label, `a row in ${group.title} has no label`)
+    }
+  }
+})
+
+// The sheet is the only place the keymap is written down for the user. If a
+// binding is renamed in the QML and not here, the sheet starts lying -- so
+// check each documented chord against what the QML actually binds.
+test("every key the sheet documents is really bound in the QML", () => {
+  const root = path.join(__dirname, "..")
+  const sources = ["Panel.qml", path.join("components", "DotEditor.qml")]
+    .map((f) => fs.readFileSync(path.join(root, f), "utf8"))
+    .join("\n")
+
+  const named = { Esc: "Escape", Enter: "Return", Tab: "Tab", F1: "F1" }
+  const sheet = model.shortcutSheet("SUPER + CTRL + J")
+
+  for (const group of [...sheet.left, ...sheet.right]) {
+    // The global chord is registered with Hyprland, not bound in QML, and the
+    // mouse rows are wired to onPressed rather than to a key.
+    if (group.title === "Anywhere" || group.title === "The bar dot") continue
+
+    for (const item of group.items) {
+      // "Enter on empty" is the same key as "Enter" in a different state.
+      const chord = item.keys.replace(/ on empty$/, "")
+      const last = chord.split(" + ").pop().trim()
+
+      let symbols
+      if (named[last]) symbols = [`Qt.Key_${named[last]}`]
+      else if (/^[0-9A-Z]$/.test(last)) symbols = [`Qt.Key_${last}`]
+      else if (/^\d…\d$/.test(last)) symbols = [`Qt.Key_${last[0]}`]   // "1…7"
+      else if (last === "← →") symbols = ["Qt.Key_Left", "Qt.Key_Right"]
+      else throw new Error(`the test cannot map "${item.keys}" to a Qt key`)
+
+      for (const symbol of symbols) {
+        assert.ok(sources.includes(symbol),
+          `the sheet documents "${item.keys}" but ${symbol} is not bound in the QML`)
+      }
+    }
+  }
+})

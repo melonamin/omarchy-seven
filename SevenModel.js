@@ -454,6 +454,98 @@ function toggleHeading(text, cursor, level) {
   return edit(lineStart, lineStart + oldPrefix, newPrefix, shifted < floor ? floor : shifted)
 }
 
+// A tab is four spaces. Markdown nesting is defined in spaces, and a literal
+// tab renders at whatever width the next program feels like.
+var TAB_WIDTH = 4
+
+function tabEdit(text, selectionStart, selectionEnd) {
+  var value = string(text)
+  var from = clampPos(selectionStart, value.length)
+  var to = clampPos(selectionEnd, value.length)
+  if (to < from) {
+    var swap = from
+    from = to
+    to = swap
+  }
+  var spaces = ""
+  for (var i = 0; i < TAB_WIDTH; i++) spaces += " "
+  return edit(from, to, spaces, from + TAB_WIDTH)
+}
+
+// "SUPER + CTRL + J" is how Hyprland wants it written; this is how a person
+// wants to read it.
+function prettyShortcut(value) {
+  var parts = normalizeShortcut(value).split(" + ")
+  var result = []
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i]
+    if (part === "") continue
+    result.push(part.charAt(0) + part.slice(1).toLowerCase())
+  }
+  return result.join(" + ")
+}
+
+// Every binding the plugin has, in the two columns the cheat sheet draws. This
+// is the single place they are written down; the tests check it against what
+// the QML actually binds, so the sheet cannot quietly go stale.
+function shortcutSheet(shortcut) {
+  var global = string(shortcut) === ""
+    ? "not set"
+    : prettyShortcut(shortcut)
+
+  return {
+    left: [
+      {
+        title: "Anywhere",
+        items: [
+          { keys: global, label: "Open or close Seven" }
+        ]
+      },
+      {
+        title: "Notes",
+        items: [
+          { keys: "Alt + 1…7", label: "Jump to that note" },
+          { keys: "Alt + ← →", label: "Previous, next" },
+          { keys: "Alt + P", label: "Source or preview" },
+          { keys: "Esc", label: "Close" }
+        ]
+      },
+      {
+        title: "The bar dot",
+        items: [
+          { keys: "Click", label: "Open or close" },
+          { keys: "Right click", label: "Dot colour on or off" },
+          { keys: "Middle click", label: "Next note" },
+          { keys: "Wheel", label: "Walk the notes" }
+        ]
+      }
+    ],
+    right: [
+      {
+        title: "Writing",
+        items: [
+          { keys: "Enter", label: "Continue the list" },
+          { keys: "Enter on empty", label: "End the list" },
+          { keys: "Shift + Enter", label: "Plain newline" },
+          { keys: "Tab", label: "Four spaces" },
+          { keys: "Ctrl + B", label: "Bold" },
+          { keys: "Ctrl + I", label: "Italic" },
+          { keys: "Ctrl + Shift + X", label: "Strikethrough" },
+          { keys: "Ctrl + 1…6", label: "Heading level" },
+          { keys: "Ctrl + 0", label: "Clear heading" }
+        ]
+      },
+      {
+        title: "This sheet",
+        items: [
+          { keys: "F1", label: "Show or hide" },
+          { keys: "Esc", label: "Hide" }
+        ]
+      }
+    ]
+  }
+}
+
 // Node's test runner imports this file; Quickshell just evaluates it.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
@@ -481,6 +573,10 @@ if (typeof module !== "undefined" && module.exports) {
     settingsFromEntry: settingsFromEntry,
     withSetting: withSetting,
     newlineEdit: newlineEdit,
+    tabEdit: tabEdit,
+    TAB_WIDTH: TAB_WIDTH,
+    prettyShortcut: prettyShortcut,
+    shortcutSheet: shortcutSheet,
     toggleWrap: toggleWrap,
     toggleHeading: toggleHeading,
     lineStartOf: lineStartOf,

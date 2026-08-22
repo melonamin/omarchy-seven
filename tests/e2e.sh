@@ -154,14 +154,15 @@ sleep 1
 [[ $(omarchy-shell seven read 5) == "note five again" ]] || fail "Alt+P did not return to the editor"
 pass "Alt+P returns to the editor with typing restored"
 
-# Tab must stay an ordinary editing key now that it no longer toggles the
-# preview -- if it moved focus out of the editor instead, typing would vanish.
+# Tab indents by four spaces. If it moved focus out of the editor instead,
+# the typing that follows would vanish.
 wtype -k Tab
 sleep 1
 wtype "indented"
 sleep 1.2
-[[ $(omarchy-shell seven read 5) == *"indented" ]] || fail "Tab moved focus out of the editor"
-pass "Tab stays in the editor as an ordinary key"
+[[ $(omarchy-shell seven read 5) == *"    indented" ]] \
+  || fail "Tab did not insert four spaces, got: $(printf '%q' "$(omarchy-shell seven read 5)")"
+pass "Tab indents by four spaces and keeps focus"
 
 # --- closing ------------------------------------------------------------------
 
@@ -230,6 +231,36 @@ pass "clear reaches a dot whose editor is focused"
 omarchy-shell -q seven close >/dev/null 2>&1 || true
 sleep 1
 
+# --- the cheat sheet --------------------------------------------------------
+
+await_empty 7 || fail "dot 7 did not empty before the cheat-sheet checks"
+omarchy-shell -q seven show 7 >/dev/null; sleep 1.5
+wtype "abc"; sleep 1
+[[ $(omarchy-shell seven read 7) == "abc" ]] || fail "could not seed dot 7"
+
+wtype -k F1; sleep 1.2
+wtype "zzz"; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "abc" ]] \
+  || fail "the note took keystrokes while the cheat sheet was up"
+pass "F1 opens the cheat sheet over the note"
+
+# Escape peels one layer: the sheet closes, the panel stays.
+wtype -k Escape; sleep 1.2
+panel_open || fail "Escape closed the whole panel instead of just the cheat sheet"
+pass "Escape closes the cheat sheet without closing the panel"
+
+wtype "def"; sleep 1.2
+[[ $(omarchy-shell seven read 7) == "abcdef" ]] \
+  || fail "the editor did not get focus back after the cheat sheet closed"
+pass "the editor takes focus back when the sheet closes"
+
+# F1 again, then Escape twice, should end with nothing on screen.
+wtype -k F1; sleep 1
+wtype -k Escape; sleep 1
+wtype -k Escape; sleep 1.2
+panel_open && fail "Escape did not close the panel after the sheet was dismissed"
+pass "Escape closes the panel once the sheet is gone"
+
 # --- the global shortcut ---------------------------------------------------
 #
 # wtype cannot exercise this: synthetic keys from a virtual keyboard do not
@@ -277,7 +308,7 @@ fi
 # The note must outlive the panel -- that is the whole point of a scratchpad.
 # Dot 5 has accumulated everything typed into it above, tab included.
 final=$(omarchy-shell seven read 5)
-[[ $final == "note five again"* && $final == *"indented" ]] \
+[[ $final == "note five again"* && $final == *"    indented" ]] \
   || fail "text was lost when the panel closed, got: $(printf '%q' "$final")"
 pass "notes survive the panel closing"
 

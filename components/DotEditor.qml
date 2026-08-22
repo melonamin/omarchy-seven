@@ -17,6 +17,7 @@ ScrollView {
   signal edited(string text)
   signal closeRequested()
   signal previewRequested()
+  signal helpRequested()
   signal dotRequested(int index)
   signal stepRequested(int delta)
 
@@ -92,6 +93,21 @@ ScrollView {
     Keys.onPressed: function(event) {
       if (event.key === Qt.Key_Escape) {
         root.closeRequested()
+        event.accepted = true
+        return
+      }
+
+      if (event.key === Qt.Key_F1) {
+        root.helpRequested()
+        event.accepted = true
+        return
+      }
+
+      // A tab is four spaces. Left to itself TextArea inserts a literal tab,
+      // which markdown nesting does not count in and every other program
+      // renders at a width of its own choosing.
+      if (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ShiftModifier)) {
+        root.applyEdit(SevenModel.tabEdit(area.text, area.selectionStart, area.selectionEnd))
         event.accepted = true
         return
       }

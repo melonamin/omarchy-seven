@@ -39,6 +39,15 @@ Panel {
   // reason you hit the shortcut is almost always to write something down.
   property bool previewing: false
 
+  // The cheat sheet, shown over the note. Closing it returns to whichever half
+  // of the dot was showing before.
+  property bool helpOpen: false
+
+  readonly property string activeShortcut: root.service
+    ? String(root.service.requestedShortcut)
+    : String(root.config.shortcut)
+  readonly property var sheet: SevenModel.shortcutSheet(root.activeShortcut)
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -74,8 +83,18 @@ Panel {
   }
 
   function focusActiveSurface() {
-    if (root.previewing) keyCatcher.forceActiveFocus()
+    if (root.helpOpen || root.previewing) keyCatcher.forceActiveFocus()
     else editor.focusAtEnd()
+  }
+
+  function toggleHelp() {
+    helpOpen = !helpOpen
+  }
+
+  // Escape peels one layer at a time: the sheet first, the panel second.
+  function dismiss() {
+    if (helpOpen) helpOpen = false
+    else close()
   }
 
   function togglePreview() {
@@ -95,6 +114,7 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       previewing = false
+      helpOpen = false
       loadActiveIntoEditor()
       Qt.callLater(focusActiveSurface)
     } else if (service) {
@@ -110,6 +130,7 @@ Panel {
   }
 
   onPreviewingChanged: if (opened) Qt.callLater(focusActiveSurface)
+  onHelpOpenChanged: if (opened) Qt.callLater(focusActiveSurface)
 
   // A dot rewritten out from under the panel.
   //
@@ -174,7 +195,13 @@ Panel {
     // While editing, the TextArea itself takes focus so the panel is ready to
     // type into the instant it appears.
     focusTarget: root.previewing ? keyCatcher : editor.editorItem
-    contentWidth: panel.fittedContentWidth(Style.space(430))
+    // The sheet needs two readable columns of key-and-meaning, which do not fit
+    // the writing width. Widening for it beats eliding the explanations.
+    contentWidth: panel.fittedContentWidth(Style.space(root.helpOpen ? 620 : 430))
+
+    Behavior on contentWidth {
+      NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+    }
     contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight)
 
     // Deliberately not qs.Ui's PanelKeyCatcher. That component is built for
@@ -192,10 +219,17 @@ Panel {
 
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) {
-          root.close()
+          root.dismiss()
           event.accepted = true
           return
         }
+        if (event.key === Qt.Key_F1) {
+          root.toggleHelp()
+          event.accepted = true
+          return
+        }
+        // With the sheet up, nothing else should move the note underneath it.
+        if (root.helpOpen) return
         if (event.key === Qt.Key_P && (event.modifiers & Qt.AltModifier)) {
           root.togglePreview()
           event.accepted = true
@@ -255,8 +289,8 @@ Panel {
           DotEditor {
             id: editor
             anchors.fill: parent
-            visible: !root.previewing
-            enabled: !root.previewing
+            visible: !root.previewing && !root.helpOpen
+            enabled: visible
             foreground: Color.popups.text
             monospace: root.config.monospace
 
@@ -265,7 +299,8 @@ Panel {
             onEdited: function(text) {
               if (root.service) root.service.setText(root.service.activeIndex, text)
             }
-            onCloseRequested: root.close()
+            onCloseRequested: root.dismiss()
+            onHelpRequested: root.toggleHelp()
             onPreviewRequested: root.togglePreview()
             onDotRequested: function(index) { root.selectDot(index) }
             onStepRequested: function(delta) { root.stepDot(delta) }
@@ -274,8 +309,8 @@ Panel {
           DotPreview {
             id: preview
             anchors.fill: parent
-            visible: root.previewing
-            enabled: root.previewing
+            visible: root.previewing && !root.helpOpen
+            enabled: visible
             foreground: Color.popups.text
             source: root.activeText
 
@@ -283,6 +318,15 @@ Panel {
               Quickshell.execDetached(["xdg-open", url])
               root.close()
             }
+          }
+
+          ShortcutSheet {
+            anchors.fill: parent
+            visible: root.helpOpen
+            leftGroups: root.sheet.left
+            rightGroups: root.sheet.right
+            foreground: Color.popups.text
+            fontFamily: root.fontFamily
           }
         }
 
@@ -307,16 +351,42 @@ Panel {
             font.pixelSize: Style.font.caption
           }
 
-          Text {
+          // The keys used to be spelled out along this edge, which only ever
+          // had room for three of them. One question mark opens the lot.
+          Item {
             id: hint
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.previewing ? "Alt+P edit · Esc close" : "Alt+P preview · Alt+1-7 dots · Esc close"
-            textFormat: Text.PlainText
-            color: Util.alpha(Color.popups.text, 0.38)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
+            width: Style.space(18)
+            height: Style.space(18)
+
+            Rectangle {
+              anchors.fill: parent
+              radius: width / 2
+              color: root.helpOpen
+                ? Util.alpha(Color.popups.text, 0.14)
+                : (helpHover.hovered ? Util.alpha(Color.popups.text, 0.09) : "transparent")
+            }
+
+            Text {
+              anchors.centerIn: parent
+              text: "?"
+              textFormat: Text.PlainText
+              color: Util.alpha(Color.popups.text, root.helpOpen || helpHover.hovered ? 0.85 : 0.42)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
+            HoverHandler {
+              id: helpHover
+              cursorShape: Qt.PointingHandCursor
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              onClicked: root.toggleHelp()
+            }
           }
         }
       }

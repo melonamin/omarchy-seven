@@ -21,8 +21,8 @@ affiliated with or endorsed by The Iconfactory.
   again. The editor takes focus immediately, with the caret at the end of what
   you last wrote, on the dot you were last using.
 - **Markdown when you want it.** Lists continue themselves, indentation is
-  carried down, and `Ctrl + B` / `Ctrl + I` / `Ctrl + 1`…`6` do what they do
-  everywhere else. `Alt + P` flips the current dot between its plain source and
+  carried down, `Tab` is four spaces, and `Ctrl + B` / `Ctrl + I` /
+  `Ctrl + 1`…`6` do what they do everywhere else. The `?` button lists the lot. `Alt + P` flips the current dot between its plain source and
   a rendered preview. Rendering is Qt's own Markdown support, so headings,
   lists, task lists, and links all work and there is no parser here to disagree
   with CommonMark.
@@ -63,7 +63,13 @@ were last using, ready to type.
 | `Alt` + `1`…`7` | Jump to that dot |
 | `Alt` + `←` / `→` | Previous / next dot, wrapping |
 | `Alt` + `P` | Flip between the editor and the rendered preview |
-| `Esc` | Close the panel |
+| `F1` or the `?` button | Show every shortcut on one sheet |
+| `Esc` | Close the sheet if it is up, otherwise the panel |
+
+You never have to remember any of this: the `?` in the bottom corner of the
+panel opens a sheet with every key on it, including the ones below.
+
+![The cheat sheet](cheatsheet.png)
 
 In the preview, `1`…`7` and the bare arrow keys move between dots. Letters do
 nothing there — a key press while you are reading should never move you to a
@@ -83,7 +89,7 @@ is an ordinary edit — `Ctrl + Z` undoes it.
 | `Enter` | Continues the list you are in, numbering ordered items and leaving task boxes unchecked |
 | `Enter` on an empty item | Ends the list and takes the marker away |
 | `Shift` + `Enter` | A plain newline, with none of the above |
-| `Tab` | Just a tab. It indents, so nested lists work |
+| `Tab` | Four spaces. Markdown counts nesting in spaces, and a literal tab renders at whatever width the next program feels like |
 | `Ctrl` + `B` | Bold. Again on bold text removes it |
 | `Ctrl` + `I` | Italic |
 | `Ctrl` + `Shift` + `X` | Strikethrough |
