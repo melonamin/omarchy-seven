@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Commons
-import "../SevenModel.js" as SevenModel
+import "SevenModel.js" as SevenModel
 
 // The seven dots. A dot is solid when it holds text and hollow when it does
 // not, so the row doubles as the only index this plugin has: you learn "the

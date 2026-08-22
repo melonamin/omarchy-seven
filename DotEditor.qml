@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
-import "../SevenModel.js" as SevenModel
+import "SevenModel.js" as SevenModel
 
 // The editing half of a dot. A plain TextArea -- no toolbar, no formatting
 // buttons, no autosave indicator. Text is saved by the service on a debounce,

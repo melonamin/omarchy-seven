@@ -8,6 +8,8 @@
 # It takes over the keyboard for a few seconds and drives the real notes. All
 # seven dots are snapshotted and restored on any exit path; even so, run it
 # when you are not mid-sentence somewhere else.
+#
+# Usage: tests/e2e.sh
 set -euo pipefail
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)

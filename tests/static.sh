@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Static checks that need no running shell: manifest shape, QML syntax, and the
 # handful of wiring facts that only break at runtime if nobody looks for them.
+#
+# Usage: tests/static.sh
 set -euo pipefail
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -72,7 +74,7 @@ pass "dropdown uses KeyboardPanel so the editor can be typed into"
 
 # Seven is the whole premise, so it is defined once in the model and every
 # other file counts through it.
-grep -q 'model: SevenModel.DOT_COUNT' "$root_dir/components/DotStrip.qml" \
+grep -q 'model: SevenModel.DOT_COUNT' "$root_dir/DotStrip.qml" \
   || fail "DotStrip.qml must build its dots from SevenModel.DOT_COUNT"
 grep -q 'model: SevenModel.DOT_COUNT' "$root_dir/Service.qml" \
   || fail "Service.qml must build its FileViews from SevenModel.DOT_COUNT"
@@ -92,11 +94,11 @@ pass "the runtime shortcut is wired to hypr/seven.lua with a description"
 # markdown list becomes impossible.
 grep -qE 'Qt\.Key_(Tab|Backtab)' "$root_dir/Panel.qml" \
   && fail "Tab is bound in the panel; it belongs to the editor"
-grep -q 'Qt.Key_Tab' "$root_dir/components/DotEditor.qml" \
+grep -q 'Qt.Key_Tab' "$root_dir/DotEditor.qml" \
   || fail "Tab is not bound in the editor"
-grep -q 'SevenModel.tabEdit' "$root_dir/components/DotEditor.qml" \
+grep -q 'SevenModel.tabEdit' "$root_dir/DotEditor.qml" \
   || fail "Tab must insert spaces through SevenModel.tabEdit, not a literal tab"
-grep -q 'Qt.Key_P' "$root_dir/components/DotEditor.qml" || fail "Alt+P is not bound in the editor"
+grep -q 'Qt.Key_P' "$root_dir/DotEditor.qml" || fail "Alt+P is not bound in the editor"
 grep -q 'Qt.Key_P' "$root_dir/Panel.qml" || fail "Alt+P is not bound in the preview"
 pass "Alt+P toggles the preview and Tab indents"
 
@@ -105,7 +107,7 @@ pass "Alt+P toggles the preview and Tab indents"
 grep -q 'ShortcutSheet' "$root_dir/Panel.qml" || fail "Panel.qml does not show the cheat sheet"
 grep -q 'root.toggleHelp()' "$root_dir/Panel.qml" || fail "nothing opens the cheat sheet"
 grep -q 'Qt.Key_F1' "$root_dir/Panel.qml" || fail "F1 does not open the cheat sheet from the preview"
-grep -q 'Qt.Key_F1' "$root_dir/components/DotEditor.qml" || fail "F1 does not open the cheat sheet from the editor"
+grep -q 'Qt.Key_F1' "$root_dir/DotEditor.qml" || fail "F1 does not open the cheat sheet from the editor"
 grep -q 'SevenModel.shortcutSheet' "$root_dir/Panel.qml" \
   || fail "the sheet must be built from SevenModel.shortcutSheet"
 grep -q 'onClicked: root.toggleHelp()' "$root_dir/Panel.qml" \
@@ -130,22 +132,22 @@ pass "right click toggles the dot style and persists it"
 # only applies them. Keeping the logic out of QML is what makes it testable.
 for helper in newlineEdit toggleWrap toggleHeading; do
   grep -q "function $helper" "$root_dir/SevenModel.js" || fail "SevenModel.js has no $helper"
-  grep -q "SevenModel.$helper" "$root_dir/components/DotEditor.qml" \
+  grep -q "SevenModel.$helper" "$root_dir/DotEditor.qml" \
     || fail "DotEditor.qml does not use SevenModel.$helper"
 done
 pass "list continuation, wrapping, and headings come from the model"
 
 # Edits go through remove/insert so Ctrl+Z still works; reassigning `text`
 # would flatten the whole note into one undo step.
-grep -q 'area.remove' "$root_dir/components/DotEditor.qml" \
+grep -q 'area.remove' "$root_dir/DotEditor.qml" \
   || fail "edits must be applied through TextArea.remove/insert to keep undo"
-grep -q 'area.insert' "$root_dir/components/DotEditor.qml" \
+grep -q 'area.insert' "$root_dir/DotEditor.qml" \
   || fail "edits must be applied through TextArea.remove/insert to keep undo"
 pass "markdown edits preserve the editor's undo history"
 
 # Focus must follow visibility; a forceActiveFocus pushed in from the panel
 # races the visible binding and silently does nothing.
-grep -q 'onVisibleChanged: if (visible)' "$root_dir/components/DotEditor.qml" \
+grep -q 'onVisibleChanged: if (visible)' "$root_dir/DotEditor.qml" \
   || fail "the editor must take focus when it becomes visible"
 pass "the editor takes focus when it becomes visible"
 
@@ -160,7 +162,7 @@ pass "visibility and enabled are not tied together"
 # A bare function reference handed to Qt.callLater is re-resolved when the call
 # runs, and throws if that context has gone invalid -- leaving nothing focused
 # and the typing that follows going nowhere, intermittently.
-if sed 's,//.*,,' "$root_dir/Panel.qml" "$root_dir/components/DotEditor.qml" \
+if sed 's,//.*,,' "$root_dir/Panel.qml" "$root_dir/DotEditor.qml" \
   | grep -qE 'Qt\.callLater\([A-Za-z_.]+\)'; then
   fail "Qt.callLater is passed a bare function reference; wrap it in a closure"
 fi

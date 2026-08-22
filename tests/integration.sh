@@ -4,6 +4,8 @@
 #
 # This drives the real notes, so it snapshots all seven dots up front and a
 # trap restores them byte-for-byte on any exit path.
+#
+# Usage: tests/integration.sh
 set -euo pipefail
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)

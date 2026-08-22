@@ -4,7 +4,6 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 import "SevenModel.js" as SevenModel
-import "components"
 
 // Bar button plus the dropdown that holds the notes.
 //

@@ -451,7 +451,7 @@ test("the sheet is well formed and covers both columns", () => {
 // check each documented chord against what the QML actually binds.
 test("every key the sheet documents is really bound in the QML", () => {
   const root = path.join(__dirname, "..")
-  const sources = ["Panel.qml", path.join("components", "DotEditor.qml")]
+  const sources = ["Panel.qml", "DotEditor.qml"]
     .map((f) => fs.readFileSync(path.join(root, f), "utf8"))
     .join("\n")
 
