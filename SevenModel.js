@@ -454,6 +454,21 @@ function toggleHeading(text, cursor, level) {
   return edit(lineStart, lineStart + oldPrefix, newPrefix, shifted < floor ? floor : shifted)
 }
 
+// Where the caret belongs after a dot is refilled from outside.
+//
+// If everything before the caret survived the change -- someone appended to the
+// file, or an IPC append added a line -- staying put is what the writer expects.
+// If the text before it changed, the old offset is meaningless and would drop
+// the caret into the middle of a word nobody typed, so it goes to the end.
+function caretAfterReload(oldText, newText, caret) {
+  var previous = string(oldText)
+  var next = string(newText)
+  var pos = clampPos(caret, previous.length)
+  var prefix = previous.slice(0, pos)
+  if (next.slice(0, prefix.length) === prefix) return Math.min(pos, next.length)
+  return next.length
+}
+
 // A tab is four spaces. Markdown nesting is defined in spaces, and a literal
 // tab renders at whatever width the next program feels like.
 var TAB_WIDTH = 4
@@ -574,6 +589,7 @@ if (typeof module !== "undefined" && module.exports) {
     withSetting: withSetting,
     newlineEdit: newlineEdit,
     tabEdit: tabEdit,
+    caretAfterReload: caretAfterReload,
     TAB_WIDTH: TAB_WIDTH,
     prettyShortcut: prettyShortcut,
     shortcutSheet: shortcutSheet,

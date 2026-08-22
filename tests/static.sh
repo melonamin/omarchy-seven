@@ -149,6 +149,23 @@ grep -q 'onVisibleChanged: if (visible)' "$root_dir/components/DotEditor.qml" \
   || fail "the editor must take focus when it becomes visible"
 pass "the editor takes focus when it becomes visible"
 
+# `enabled: visible` looks harmless and is not: at the instant `visible` turns
+# true the `enabled` binding has not propagated, so focus scheduled off
+# onVisibleChanged lands on a disabled item and is dropped without a word.
+# Strip comments first, or this trips over the paragraph above explaining it.
+sed 's,//.*,,' "$root_dir/Panel.qml" | grep -q 'enabled: visible' \
+  && fail "Panel.qml ties enabled to visible; that race silently drops keyboard focus"
+pass "visibility and enabled are not tied together"
+
+# A bare function reference handed to Qt.callLater is re-resolved when the call
+# runs, and throws if that context has gone invalid -- leaving nothing focused
+# and the typing that follows going nowhere, intermittently.
+if sed 's,//.*,,' "$root_dir/Panel.qml" "$root_dir/components/DotEditor.qml" \
+  | grep -qE 'Qt\.callLater\([A-Za-z_.]+\)'; then
+  fail "Qt.callLater is passed a bare function reference; wrap it in a closure"
+fi
+pass "deferred calls go through closures, not bare function references"
+
 # --- hygiene ------------------------------------------------------------------
 
 link=$(find "$root_dir" -name .git -prune -o -type l -print -quit)

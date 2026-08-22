@@ -58,11 +58,15 @@ Item {
   // IPC append, clear). Panels watch this to resync an unfocused editor.
   property int revision: 0
 
-  // `fromDisk` separates the two ways a dot can change under the panel. A file
-  // watcher firing mid-keystroke must not yank text away from the caret; an
-  // explicit `clear`/`append` over IPC is a deliberate instruction and has to
-  // land even while somebody is typing, or the command silently does nothing.
-  signal dotChangedExternally(int index, bool fromDisk)
+  // A dot's text was replaced by something other than the editor: a file
+  // watcher, or an explicit clear/append over IPC. Panels showing that dot
+  // refill from it.
+  //
+  // There is no "but the user might be typing" caveat here on purpose.
+  // adoptFromDisk below already refuses to touch a dot with unsaved local
+  // changes, so by the time this fires the editor's copy is the same text the
+  // file held a moment ago -- there is nothing left to protect.
+  signal dotChangedExternally(int index)
 
   function textAt(index) {
     return String(texts[SevenModel.clampIndex(index)] || "")
@@ -98,14 +102,14 @@ Item {
     var slot = SevenModel.clampIndex(index)
     setText(slot, SevenModel.appendText(textAt(slot), addition))
     revision++
-    dotChangedExternally(slot, false)
+    dotChangedExternally(slot)
   }
 
   function clearDot(index) {
     var slot = SevenModel.clampIndex(index)
     setText(slot, "")
     revision++
-    dotChangedExternally(slot, false)
+    dotChangedExternally(slot)
   }
 
   // Where unaddressed text goes: the first empty dot, matching Tot.
@@ -155,7 +159,7 @@ Item {
     next[slot] = value.replace(/\n$/, "")
     texts = next
     revision++
-    dotChangedExternally(slot, true)
+    dotChangedExternally(slot)
   }
 
   Component.onCompleted: {

@@ -18,6 +18,56 @@ skip() { printf '\033[1;33mskip\033[0m %s\n' "$1"; }
 
 json_get() { python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1" 2>/dev/null; }
 
+# Wait for a dot to hold exactly this text. Typing has to travel wtype ->
+# compositor -> editor -> a 400ms debounce -> the service, and every step of
+# that is slower under load. Waiting on the result makes the test say what it
+# means instead of guessing a sleep long enough to usually work.
+await_text() {
+  local dot="$1" want="$2" _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ $(omarchy-shell seven read "$dot") == "$want" ]] && return 0
+    sleep 0.3
+  done
+  printf '    wanted %q\n    got    %q\n' "$want" "$(omarchy-shell seven read "$dot")" >&2
+  return 1
+}
+
+# Type text and confirm it arrived, resending once if the compositor dropped it.
+# wtype builds a virtual keyboard per invocation and under load the odd key
+# never lands; retrying only after await_text has already waited three seconds
+# means a slow keystroke is never mistaken for a lost one and typed twice.
+type_text() {
+  local dot="$1" text="$2" want="$3" attempt
+  for attempt in 1 2; do
+    wtype -- "$text"
+    await_text "$dot" "$want" && return 0
+  done
+  return 1
+}
+
+# The service holds a keystroke the moment it is typed; the file gets it 400ms
+# later, after the debounce. Anything asserting about disk has to wait for that
+# second step rather than assume the first implies it.
+await_disk() {
+  local path="$1" want="$2" _
+  for _ in 1 2 3 4 5 6 7 8; do
+    [[ -f $path && $(cat "$path") == "$want" ]] && return 0
+    sleep 0.3
+  done
+  return 1
+}
+
+# The panel keeps its layer mapped through a 140ms fade, so "closed" is a state
+# to wait for, not something true the instant close returns.
+await_closed() {
+  local _
+  for _ in 1 2 3 4 5 6 7 8; do
+    panel_open || return 0
+    sleep 0.3
+  done
+  return 1
+}
+
 # Clearing travels IPC -> service -> panel reload. Waiting for the result beats
 # guessing a sleep, and keeps the typing that follows from racing the reload.
 await_empty() {
@@ -96,8 +146,7 @@ pass "snapshotted the notes and cleared the board"
 # --- open ---------------------------------------------------------------------
 
 omarchy-shell seven close >/dev/null 2>&1 || true
-sleep 1
-panel_open && fail "the panel was still mapped after close"
+await_closed || fail "the panel was still mapped after close"
 
 omarchy-shell seven show 2 >/dev/null
 sleep 1
@@ -108,15 +157,12 @@ pass "the panel opens on the requested dot"
 # --- typing -------------------------------------------------------------------
 
 typed="typed through the compositor"
-wtype "$typed"
-sleep 1
-
-[[ $(omarchy-shell seven read 2) == "$typed" ]] \
+type_text 2 "$typed" "$typed" \
   || fail "keystrokes never reached the editor (the dropdown is not taking keyboard focus)"
 pass "keystrokes reach the editor and land in the active dot"
 
-[[ -f "$dots_dir/2.md" ]] || fail "typing was never written to disk"
-[[ $(cat "$dots_dir/2.md") == "$typed" ]] || fail "the file on disk does not match what was typed"
+await_disk "$dots_dir/2.md" "$typed" \
+  || fail "what was typed never reached disk, file holds: $(printf '%q' "$(cat "$dots_dir/2.md" 2>/dev/null)")"
 pass "what was typed is on disk at $dots_dir/2.md"
 
 # --- switching dots from the keyboard ----------------------------------------
@@ -179,49 +225,50 @@ sleep 1.5
 await_empty 7 || fail "dot 7 did not start empty"
 
 # `--` because wtype reads a leading dash as one of its own options.
-wtype -- "- milk"; sleep 0.3
-wtype -k Return;   sleep 0.3
-wtype "eggs";      sleep 0.3
-wtype -k Return;   sleep 0.3
-wtype "bread";     sleep 1.2
-[[ $(omarchy-shell seven read 7) == $'- milk\n- eggs\n- bread' ]] \
-  || fail "Enter did not continue the bullet list, got: $(printf '%q' "$(omarchy-shell seven read 7)")"
+wtype -- "- milk"
+await_text 7 "- milk" || fail "the first list line never arrived"
+wtype -k Return; sleep 0.4
+wtype "eggs"
+await_text 7 $'- milk\n- eggs' || fail "Enter did not continue the bullet list"
+wtype -k Return; sleep 0.4
+wtype "bread"
+await_text 7 $'- milk\n- eggs\n- bread' || fail "Enter did not continue the list a second time"
 pass "Enter continues a bullet list"
 
 # Enter on the marker-only line it just made must end the list, not extend it.
 wtype -k Return; sleep 0.4
 wtype -k Return; sleep 0.4
-wtype "plain";   sleep 1.2
-[[ $(omarchy-shell seven read 7) == $'- milk\n- eggs\n- bread\nplain' ]] \
-  || fail "Enter on an empty list item did not end the list, got: $(printf '%q' "$(omarchy-shell seven read 7)")"
+wtype "plain"
+await_text 7 $'- milk\n- eggs\n- bread\nplain' \
+  || fail "Enter on an empty list item did not end the list"
 pass "Enter on an empty list item ends the list"
 
 await_empty 7 || fail "clear did not empty dot 7"
 wtype "bold"; sleep 0.6
 wtype -M ctrl -k a -m ctrl; sleep 0.4
-wtype -M ctrl -k b -m ctrl; sleep 1.2
-[[ $(omarchy-shell seven read 7) == "**bold**" ]] || fail "Ctrl+B did not bold the selection"
+wtype -M ctrl -k b -m ctrl
+await_text 7 "**bold**" || fail "Ctrl+B did not bold the selection"
 pass "Ctrl+B wraps the selection in bold"
 
-wtype -M ctrl -k b -m ctrl; sleep 1.2
-[[ $(omarchy-shell seven read 7) == "bold" ]] || fail "Ctrl+B did not unbold"
+wtype -M ctrl -k b -m ctrl
+await_text 7 "bold" || fail "Ctrl+B did not unbold"
 pass "Ctrl+B on bold text unwraps it"
 
-wtype -M ctrl -k i -m ctrl; sleep 1.2
-[[ $(omarchy-shell seven read 7) == "*bold*" ]] || fail "Ctrl+I did not italicise"
+wtype -M ctrl -k i -m ctrl
+await_text 7 "*bold*" || fail "Ctrl+I did not italicise"
 wtype -M ctrl -k i -m ctrl; sleep 1.2
 
-wtype -M ctrl -M shift -k x -m shift -m ctrl; sleep 1.2
-[[ $(omarchy-shell seven read 7) == "~~bold~~" ]] || fail "Ctrl+Shift+X did not strike through"
+wtype -M ctrl -M shift -k x -m shift -m ctrl
+await_text 7 "~~bold~~" || fail "Ctrl+Shift+X did not strike through"
 wtype -M ctrl -M shift -k x -m shift -m ctrl; sleep 1.2
 pass "Ctrl+I and Ctrl+Shift+X wrap and unwrap too"
 
-wtype -M ctrl -k 2 -m ctrl; sleep 1.2
-[[ $(omarchy-shell seven read 7) == "## bold" ]] || fail "Ctrl+2 did not set a heading"
+wtype -M ctrl -k 2 -m ctrl
+await_text 7 "## bold" || fail "Ctrl+2 did not set a heading"
 pass "Ctrl+2 makes the line a heading"
 
-wtype -M ctrl -k 2 -m ctrl; sleep 1.2
-[[ $(omarchy-shell seven read 7) == "bold" ]] || fail "Ctrl+2 did not toggle the heading back off"
+wtype -M ctrl -k 2 -m ctrl
+await_text 7 "bold" || fail "Ctrl+2 did not toggle the heading back off"
 pass "the same heading key toggles it off"
 
 # A deliberate instruction must land even while the editor holds focus.
@@ -231,12 +278,67 @@ pass "clear reaches a dot whose editor is focused"
 omarchy-shell -q seven close >/dev/null 2>&1 || true
 sleep 1
 
+# --- edits made somewhere else ----------------------------------------------
+
+# The panel is open and the editor has focus. An edit made in another program
+# has to appear here, and must not be overwritten by whatever is typed next.
+# This used to fail: focus was mistaken for "the user is typing", so the note
+# stayed stale on screen and the next keystroke wrote the stale copy back.
+await_empty 7 || fail "dot 7 did not empty before the external-edit checks"
+omarchy-shell -q seven show 7 >/dev/null; sleep 1.5
+type_text 7 "mine" "mine" || fail "could not seed dot 7"
+# Let the debounce finish before editing from outside. An external write that
+# lands while a flush is still pending is, correctly, discarded in favour of
+# the typing -- that is the conflict rule, and it is checked further down. What
+# is being tested here is the other case.
+await_disk "$dots_dir/7.md" "mine" || fail "the seed never reached disk"
+
+printf 'theirs\n' > "$dots_dir/7.md"
+for _ in 1 2 3 4 5 6; do
+  sleep 0.4
+  [[ $(omarchy-shell seven read 7) == "theirs" ]] && break
+done
+[[ $(omarchy-shell seven read 7) == "theirs" ]] \
+  || fail "an edit made outside was not picked up while the panel was focused"
+pass "an external edit reaches a focused editor"
+
+type_text 7 "!" "theirs!" \
+  || fail "typing did not continue from the external edit, got: $(printf '%q' "$(omarchy-shell seven read 7)")"
+pass "typing continues from the external edit rather than clobbering it"
+
+await_disk "$dots_dir/7.md" "theirs!" || fail "the keystroke never reached disk"
+
+# An editor that writes by replacing the file (a temp file plus rename, which
+# is what nvim does by default) must be noticed too -- the watcher is following
+# a path whose inode just changed.
+printf 'replaced\n' > "$dots_dir/7.md.tmp"
+mv "$dots_dir/7.md.tmp" "$dots_dir/7.md"
+for _ in 1 2 3 4 5 6; do
+  sleep 0.4
+  [[ $(omarchy-shell seven read 7) == "replaced" ]] && break
+done
+[[ $(omarchy-shell seven read 7) == "replaced" ]] \
+  || fail "an atomic replace (write + rename) was not noticed"
+pass "an atomic replace is noticed, not just an in-place write"
+
+# The other side of the rule: an edit that lands while a sentence is actually
+# being typed loses to the person at the keyboard.
+await_empty 7 || fail "dot 7 did not empty before the conflict check"
+wtype "mid-sentence"
+printf 'clobber\n' > "$dots_dir/7.md"
+sleep 2
+[[ $(omarchy-shell seven read 7) == "mid-sentence" ]] \
+  || fail "an external write during typing beat the person typing"
+pass "an external write during typing loses to the keyboard"
+
+omarchy-shell -q seven close >/dev/null 2>&1 || true
+sleep 1
+
 # --- the cheat sheet --------------------------------------------------------
 
 await_empty 7 || fail "dot 7 did not empty before the cheat-sheet checks"
 omarchy-shell -q seven show 7 >/dev/null; sleep 1.5
-wtype "abc"; sleep 1
-[[ $(omarchy-shell seven read 7) == "abc" ]] || fail "could not seed dot 7"
+type_text 7 "abc" "abc" || fail "could not seed dot 7"
 
 wtype -k F1; sleep 1.2
 wtype "zzz"; sleep 1.2
@@ -249,8 +351,7 @@ wtype -k Escape; sleep 1.2
 panel_open || fail "Escape closed the whole panel instead of just the cheat sheet"
 pass "Escape closes the cheat sheet without closing the panel"
 
-wtype "def"; sleep 1.2
-[[ $(omarchy-shell seven read 7) == "abcdef" ]] \
+type_text 7 "def" "abcdef" \
   || fail "the editor did not get focus back after the cheat sheet closed"
 pass "the editor takes focus back when the sheet closes"
 

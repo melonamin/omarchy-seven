@@ -73,18 +73,32 @@ Panel {
     editor.text = root.service ? root.service.textAt(root.service.activeIndex) : ""
   }
 
-  // Refill the editor without throwing the caret back to the top. Used when a
-  // dot is rewritten under an open panel, where the text is new but the writer
-  // is still where they were.
+  // Refill the editor when a dot is rewritten under an open panel, putting the
+  // caret where SevenModel.caretAfterReload says it belongs.
   function reloadKeepingCaret() {
+    var previous = editor.text
     var caret = editor.editorItem.cursorPosition
     loadActiveIntoEditor()
-    editor.editorItem.cursorPosition = Math.min(caret, editor.editorItem.length)
+    editor.editorItem.cursorPosition = SevenModel.caretAfterReload(previous, editor.text, caret)
   }
 
   function focusActiveSurface() {
     if (root.helpOpen || root.previewing) keyCatcher.forceActiveFocus()
     else editor.focusAtEnd()
+  }
+
+  // Deferred focus, always through a closure that reaches for `root` by id.
+  //
+  // Qt.callLater(focusActiveSurface) -- passing the bare function -- looks
+  // equivalent and is not: QML resolves that reference again when the call
+  // finally runs, and if the context it was captured in is no longer valid the
+  // call throws "Property 'focusAtEnd' is not a function" into the log and the
+  // panel is left with nothing focused. Typing then goes nowhere, on and off,
+  // depending on what else the shell was doing.
+  function focusSoon() {
+    Qt.callLater(function() {
+      if (root.opened) root.focusActiveSurface()
+    })
   }
 
   function toggleHelp() {
@@ -116,7 +130,7 @@ Panel {
       previewing = false
       helpOpen = false
       loadActiveIntoEditor()
-      Qt.callLater(focusActiveSurface)
+      focusSoon()
     } else if (service) {
       // Don't leave the last sentence sitting in the debounce window once the
       // panel is out of sight.
@@ -126,29 +140,28 @@ Panel {
 
   onActiveIndexChanged: {
     loadActiveIntoEditor()
-    if (opened) Qt.callLater(focusActiveSurface)
+    if (opened) focusSoon()
   }
 
-  onPreviewingChanged: if (opened) Qt.callLater(focusActiveSurface)
-  onHelpOpenChanged: if (opened) Qt.callLater(focusActiveSurface)
+  onPreviewingChanged: if (opened) focusSoon()
+  onHelpOpenChanged: if (opened) focusSoon()
 
-  // A dot rewritten out from under the panel.
+  // A dot rewritten out from under the panel: edited in another program, or
+  // changed by an IPC clear/append. Always adopt it.
   //
-  // From disk, mid-typing, the editor's copy is the newer one and the service
-  // has already kept it -- adopting the file here would delete the sentence
-  // being written. From IPC it is the other way round: the service holds what
-  // was just asked for, and ignoring it would make `seven clear 3` look broken
-  // whenever the panel happened to be open.
+  // An earlier version skipped this while the editor had focus, meaning to
+  // protect a half-typed sentence. Focus is not the same as typing, though: a
+  // panel can sit open and focused for an hour, and in that state an edit made
+  // in nvim was shown nowhere and then overwritten by the next keystroke. The
+  // service already declines to adopt a dot with unsaved changes, so that case
+  // never reaches here.
   Connections {
     target: root.service
     ignoreUnknownSignals: true
 
-    function onDotChangedExternally(index, fromDisk) {
+    function onDotChangedExternally(index) {
       if (index !== root.activeIndex) return
-      var typingHere = root.opened && !root.previewing && editor.editorItem.activeFocus
-      if (fromDisk && typingHere) return
-      if (typingHere) root.reloadKeepingCaret()
-      else root.loadActiveIntoEditor()
+      root.reloadKeepingCaret()
     }
   }
 
@@ -290,7 +303,12 @@ Panel {
             id: editor
             anchors.fill: parent
             visible: !root.previewing && !root.helpOpen
-            enabled: visible
+            // Deliberately not `enabled: visible`. A hidden item receives no
+            // keys anyway, and tying the two means that at the instant
+            // `visible` becomes true `enabled` is still false -- so a
+            // forceActiveFocus() scheduled off onVisibleChanged lands on a
+            // disabled item and does nothing, silently. That race decided
+            // whether typing worked after leaving the preview.
             foreground: Color.popups.text
             monospace: root.config.monospace
 
@@ -310,7 +328,6 @@ Panel {
             id: preview
             anchors.fill: parent
             visible: root.previewing && !root.helpOpen
-            enabled: visible
             foreground: Color.popups.text
             source: root.activeText
 

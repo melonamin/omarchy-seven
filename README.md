@@ -170,15 +170,25 @@ omarchy-shell seven status | jq -r '.diagnostic'
 ```
 
 `$XDG_DATA_HOME` is honoured if you set it. Files are written atomically, so a
-crash mid-save cannot leave you with half a note. The panel watches the
-directory, so this works and shows up immediately:
+crash mid-save cannot leave you with half a note.
+
+Seven watches those files, so editing them elsewhere works and shows up
+immediately:
 
 ```bash
 nvim ~/.local/share/omarchy-seven/dots/3.md
 ```
 
-If you are typing into a dot at the moment its file changes underneath you,
-your text wins and gets written back — the point is never to lose a sentence.
+The change lands whether the panel is closed, open on another note, or open on
+that very note with the cursor in it — in the editor and in the preview alike.
+Editors that save by replacing the file (a temp file plus a rename, which is
+`nvim`'s default) are noticed the same as an in-place write. If everything
+before your cursor survived the change, the cursor stays where it was;
+otherwise it moves to the end rather than landing mid-word.
+
+There is exactly one case where an outside edit is refused: if it lands while
+you are actually mid-sentence, your typing wins and gets written back. The
+point is never to lose a sentence you were in the middle of.
 
 There is no sync built in, on purpose. The files are ordinary enough that
 Syncthing, `git`, or `rclone` will do a better job than this plugin could.

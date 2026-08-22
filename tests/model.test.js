@@ -482,3 +482,18 @@ test("every key the sheet documents is really bound in the QML", () => {
     }
   }
 })
+
+test("the caret survives a reload when the text before it did", () => {
+  // Someone appended to the file: stay where you were.
+  assert.equal(model.caretAfterReload("abc", "abcdef", 3), 3)
+  assert.equal(model.caretAfterReload("abc", "abc\nnew line", 2), 2)
+  // The text was replaced: the old offset means nothing, so go to the end
+  // rather than landing in the middle of a word nobody typed.
+  assert.equal(model.caretAfterReload("mine", "theirs", 4), 6)
+  assert.equal(model.caretAfterReload("abc", "", 3), 0)
+  // Something was cut from the end, before the caret still matches.
+  assert.equal(model.caretAfterReload("abcdef", "abc", 2), 2)
+  // Prefix matches but the new text is shorter than the caret.
+  assert.equal(model.caretAfterReload("abcdef", "abcd", 6), 4)
+  assert.equal(model.caretAfterReload("", "fresh", 0), 0)
+})

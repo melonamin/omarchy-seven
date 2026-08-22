@@ -35,7 +35,12 @@ ScrollView {
   // still hidden -- which does nothing at all, silently, and leaves the next
   // keystrokes going nowhere. Reacting to the change itself cannot lose that
   // race.
-  onVisibleChanged: if (visible) Qt.callLater(focusEditor)
+  // Closure, not a bare `focusEditor` reference -- see focusSoon() in Panel.qml
+  // for what the bare form does when the deferred call resolves in a context
+  // that has gone invalid.
+  onVisibleChanged: if (visible) Qt.callLater(function() {
+    if (root.visible) root.focusEditor()
+  })
 
   // Put the caret where a returning writer expects it: at the end of what they
   // already wrote, not at the top of the note.
