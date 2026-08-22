@@ -1,7 +1,7 @@
-// Pure logic for Dots. No QML types are referenced here so the same source
+// Pure logic for Seven. No QML types are referenced here so the same source
 // runs under Quickshell's JS engine and under node for the unit tests.
 
-var PLUGIN_ID = "melonamin.dots"
+var PLUGIN_ID = "melonamin.seven"
 
 // Seven dots. Not six, not eight, and never a "new note" button -- the fixed
 // count is the whole idea: you stop filing and start writing.
@@ -65,7 +65,7 @@ function fileNameFor(index) {
 function dotsDir(home, xdgDataHome) {
   var base = string(xdgDataHome)
   if (base === "") base = string(home) + "/.local/share"
-  return base + "/omarchy-dots/dots"
+  return base + "/omarchy-seven/dots"
 }
 
 function pathFor(home, xdgDataHome, index) {
@@ -180,11 +180,102 @@ function normalize(text) {
   return string(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
 }
 
+var DEFAULT_SHORTCUT = "SUPER + CTRL + J"
+
+// Hyprland wants "SUPER + CTRL + J". Users write it every other way, so accept
+// commas, plain spaces, and any casing, and hand Hyprland one shape.
+function normalizeShortcut(value) {
+  var raw = string(value).replace(/[,+]/g, " ")
+  var parts = raw.split(/\s+/)
+  var result = []
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim()
+    if (part !== "") result.push(part.toUpperCase())
+  }
+  return result.join(" + ")
+}
+
+// Hyprland's modifier bitmask, as reported by `hyprctl binds`. Only the
+// modifiers a person would actually put in a shortcut are listed.
+var MODMASK = { SHIFT: 1, CAPS: 2, CTRL: 4, CONTROL: 4, ALT: 8, SUPER: 64, MOD5: 128 }
+
+// Split a shortcut into the (modmask, key) pair `hyprctl binds` reports, so a
+// registered binding can be found again and a collision can be spotted.
+function shortcutChord(value) {
+  var parts = normalizeShortcut(value).split(" + ")
+  var modmask = 0
+  var key = ""
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i]
+    if (part === "") continue
+    if (MODMASK[part] !== undefined) modmask |= MODMASK[part]
+    else key = part
+  }
+  return { modmask: modmask, key: key }
+}
+
+// This plugin's inline settings in shell.json, if the user has any. Absent is
+// normal: an entry is only written once a setting is changed.
+//
+// A bar widget's settings live on its `bar.layout` entry, which is where the
+// settings UI writes them and where the bar hands them to the panel. The
+// `plugins[]` array is the other place a plugin's settings can live. The
+// service reads both, layout first, so a user who puts `shortcut` next to
+// their other Seven settings gets what they expect rather than silence.
+function findSettingsEntry(config, pluginId) {
+  var id = String(pluginId)
+  var layout = config && config.bar && config.bar.layout
+  if (layout) {
+    var sections = ["left", "center", "right"]
+    for (var s = 0; s < sections.length; s++) {
+      var items = layout[sections[s]]
+      if (!items || !items.length) continue
+      for (var i = 0; i < items.length; i++) {
+        if (items[i] && String(items[i].id) === id) return items[i]
+      }
+    }
+  }
+  var plugins = config && config.plugins
+  if (plugins && plugins.length) {
+    for (var j = 0; j < plugins.length; j++) {
+      if (plugins[j] && String(plugins[j].id) === id) return plugins[j]
+    }
+  }
+  return null
+}
+
+// Does `bindings` (from `hyprctl binds -j`) contain our described bind, and is
+// anything else sitting on the same chord?
+function shortcutState(bindings, shortcut, description) {
+  var chord = shortcutChord(shortcut)
+  var list = Array.isArray(bindings) ? bindings : []
+  var found = false
+  var collision = false
+  for (var i = 0; i < list.length; i++) {
+    var bind = list[i] || {}
+    if (Number(bind.modmask || 0) !== chord.modmask) continue
+    if (String(bind.key || "").toUpperCase() !== chord.key) continue
+    if (String(bind.submap || "") !== "") continue
+    if (String(bind.description || "") === description) found = true
+    else collision = true
+  }
+  return { found: found, collision: collision }
+}
+
 function settingsFromEntry(entry) {
   var source = entry && typeof entry === "object" ? entry : {}
+  // An absent shortcut means "use the default"; an explicit empty string means
+  // "I do not want a global binding", so those two cannot collapse together.
+  var shortcut = source.shortcut === undefined || source.shortcut === null
+    ? DEFAULT_SHORTCUT
+    : normalizeShortcut(source.shortcut)
   return {
     monospace: bool(source.monospace, true),
-    showCounts: bool(source.showCounts, true)
+    showCounts: bool(source.showCounts, true),
+    // true  -> the bar dot takes the active note's colour, hollow when empty.
+    // false -> a solid dot in the bar's own foreground, like every other item.
+    colorfulDot: bool(source.colorfulDot, true),
+    shortcut: shortcut
   }
 }
 
@@ -223,6 +314,11 @@ if (typeof module !== "undefined" && module.exports) {
     appendText: appendText,
     normalize: normalize,
     settingsFromEntry: settingsFromEntry,
+    normalizeShortcut: normalizeShortcut,
+    shortcutChord: shortcutChord,
+    findSettingsEntry: findSettingsEntry,
+    shortcutState: shortcutState,
+    DEFAULT_SHORTCUT: DEFAULT_SHORTCUT,
     stepIndex: stepIndex
   }
 }

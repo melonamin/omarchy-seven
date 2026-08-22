@@ -3,7 +3,7 @@ const test = require("node:test")
 const path = require("node:path")
 const fs = require("node:fs")
 
-const model = require(path.join(__dirname, "..", "DotsModel.js"))
+const model = require(path.join(__dirname, "..", "SevenModel.js"))
 
 test("there are exactly seven dots, and seven colours for them", () => {
   assert.equal(model.DOT_COUNT, 7)
@@ -41,9 +41,9 @@ test("dot files are plain, predictable, 1-based names", () => {
 })
 
 test("storage honours XDG_DATA_HOME and falls back to ~/.local/share", () => {
-  assert.equal(model.dotsDir("/home/x", ""), "/home/x/.local/share/omarchy-dots/dots")
-  assert.equal(model.dotsDir("/home/x", "/data"), "/data/omarchy-dots/dots")
-  assert.equal(model.pathFor("/home/x", "", 2), "/home/x/.local/share/omarchy-dots/dots/3.md")
+  assert.equal(model.dotsDir("/home/x", ""), "/home/x/.local/share/omarchy-seven/dots")
+  assert.equal(model.dotsDir("/home/x", "/data"), "/data/omarchy-seven/dots")
+  assert.equal(model.pathFor("/home/x", "", 2), "/home/x/.local/share/omarchy-seven/dots/3.md")
 })
 
 test("a whitespace-only dot counts as empty", () => {
@@ -140,12 +140,75 @@ test("normalize folds CRLF and lone CR, since any editor may have written the fi
 })
 
 test("settings default on, and only accept a real boolean as off", () => {
-  assert.deepEqual(model.settingsFromEntry(null), { monospace: true, showCounts: true })
-  assert.deepEqual(model.settingsFromEntry({}), { monospace: true, showCounts: true })
-  assert.deepEqual(model.settingsFromEntry({ monospace: false }), { monospace: false, showCounts: true })
+  const defaults = { monospace: true, showCounts: true, colorfulDot: true, shortcut: model.DEFAULT_SHORTCUT }
+  assert.deepEqual(model.settingsFromEntry(null), defaults)
+  assert.deepEqual(model.settingsFromEntry({}), defaults)
+  assert.equal(model.settingsFromEntry({ monospace: false }).monospace, false)
+  assert.equal(model.settingsFromEntry({ colorfulDot: false }).colorfulDot, false)
   // A missing key is not "false"; only an explicit false turns a toggle off.
   assert.equal(model.settingsFromEntry({ monospace: undefined }).monospace, true)
   assert.equal(model.settingsFromEntry({ showCounts: "yes" }).showCounts, false)
+})
+
+test("an absent shortcut means the default, an empty one means no binding", () => {
+  assert.equal(model.settingsFromEntry({}).shortcut, model.DEFAULT_SHORTCUT)
+  assert.equal(model.settingsFromEntry({ shortcut: null }).shortcut, model.DEFAULT_SHORTCUT)
+  // Explicitly empty is a choice, not an omission, and must survive as one.
+  assert.equal(model.settingsFromEntry({ shortcut: "" }).shortcut, "")
+  assert.equal(model.settingsFromEntry({ shortcut: "   " }).shortcut, "")
+})
+
+test("shortcuts normalise to the one shape Hyprland wants", () => {
+  assert.equal(model.normalizeShortcut("super, ctrl, m"), "SUPER + CTRL + M")
+  assert.equal(model.normalizeShortcut("SUPER+CTRL+J"), "SUPER + CTRL + J")
+  assert.equal(model.normalizeShortcut("  super   ctrl   j  "), "SUPER + CTRL + J")
+  assert.equal(model.normalizeShortcut("SUPER + CTRL + J"), "SUPER + CTRL + J")
+  assert.equal(model.normalizeShortcut(""), "")
+})
+
+test("a shortcut splits into the modmask and key hyprctl reports", () => {
+  assert.deepEqual(model.shortcutChord("SUPER + CTRL + J"), { modmask: 68, key: "J" })
+  assert.deepEqual(model.shortcutChord("SUPER"), { modmask: 64, key: "" })
+  assert.deepEqual(model.shortcutChord("super shift alt k"), { modmask: 73, key: "K" })
+  // A repeated modifier must not double the mask.
+  assert.deepEqual(model.shortcutChord("CTRL + CONTROL + K"), { modmask: 4, key: "K" })
+  assert.deepEqual(model.shortcutChord(""), { modmask: 0, key: "" })
+})
+
+test("shortcut state separates 'registered' from 'someone else owns this chord'", () => {
+  const mine = { modmask: 68, key: "J", submap: "", description: "Seven notes" }
+  const theirs = { modmask: 68, key: "N", submap: "", description: "Toggle nightlight" }
+  const submapped = { modmask: 68, key: "J", submap: "resize", description: "Something else" }
+
+  assert.deepEqual(model.shortcutState([mine, theirs], "SUPER + CTRL + J", "Seven notes"),
+    { found: true, collision: false })
+  assert.deepEqual(model.shortcutState([mine, theirs], "SUPER + CTRL + N", "Seven notes"),
+    { found: false, collision: true })
+  assert.deepEqual(model.shortcutState([mine, theirs], "SUPER + CTRL + Q", "Seven notes"),
+    { found: false, collision: false })
+  // A bind inside a submap does not contend for the global chord.
+  assert.deepEqual(model.shortcutState([submapped], "SUPER + CTRL + J", "Seven notes"),
+    { found: false, collision: false })
+  assert.deepEqual(model.shortcutState(null, "SUPER + CTRL + J", "Seven notes"),
+    { found: false, collision: false })
+})
+
+test("settings are found on the bar layout entry first, then plugins[]", () => {
+  const layoutOnly = { bar: { layout: { right: [{ id: "other" }, { id: "melonamin.seven", shortcut: "SUPER + ALT + M" }] } } }
+  assert.equal(model.findSettingsEntry(layoutOnly, "melonamin.seven").shortcut, "SUPER + ALT + M")
+
+  const pluginsOnly = { plugins: [{ id: "melonamin.seven", shortcut: "SUPER + ALT + P" }] }
+  assert.equal(model.findSettingsEntry(pluginsOnly, "melonamin.seven").shortcut, "SUPER + ALT + P")
+
+  // The layout entry is where the settings UI writes, so it wins.
+  const both = {
+    bar: { layout: { center: [{ id: "melonamin.seven", shortcut: "LAYOUT" }] } },
+    plugins: [{ id: "melonamin.seven", shortcut: "PLUGINS" }]
+  }
+  assert.equal(model.findSettingsEntry(both, "melonamin.seven").shortcut, "LAYOUT")
+
+  assert.equal(model.findSettingsEntry({}, "melonamin.seven"), null)
+  assert.equal(model.findSettingsEntry(null, "melonamin.seven"), null)
 })
 
 test("stepping between dots wraps in both directions", () => {
@@ -182,8 +245,11 @@ test("the manifest declares each kind's entry point and the files exist", () => 
   for (const field of manifest.barWidget.schema) {
     assert.ok(field.key in manifest.barWidget.defaults, `${field.key} has no default`)
   }
-  assert.deepEqual(
-    model.settingsFromEntry(manifest.barWidget.defaults),
-    manifest.barWidget.defaults,
-    "manifest defaults must match the model's defaults")
+  const fromManifest = model.settingsFromEntry(manifest.barWidget.defaults)
+  for (const [key, value] of Object.entries(manifest.barWidget.defaults)) {
+    assert.equal(fromManifest[key], value, `manifest default for ${key} disagrees with the model`)
+  }
+  // shortcut is deliberately absent from the manifest: there is no string
+  // control in the settings UI, so it is edited in shell.json by hand.
+  assert.ok(!("shortcut" in manifest.barWidget.defaults))
 })

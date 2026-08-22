@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Commons
-import "../DotsModel.js" as DotsModel
+import "../SevenModel.js" as SevenModel
 
 // The seven dots. A dot is solid when it holds text and hollow when it does
 // not, so the row doubles as the only index this plugin has: you learn "the
@@ -26,14 +26,14 @@ Item {
     spacing: Style.space(4)
 
     Repeater {
-      model: DotsModel.DOT_COUNT
+      model: SevenModel.DOT_COUNT
 
       delegate: Item {
         required property int index
 
         readonly property bool isActive: index === root.activeIndex
         readonly property bool isFilled: root.filled[index] === true
-        readonly property color hue: DotsModel.colorFor(index)
+        readonly property color hue: SevenModel.colorFor(index)
 
         width: root.ringSize
         height: root.ringSize

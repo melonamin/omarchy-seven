@@ -72,12 +72,36 @@ pass "dropdown uses KeyboardPanel so the editor can be typed into"
 
 # Seven is the whole premise, so it is defined once in the model and every
 # other file counts through it.
-grep -q 'model: DotsModel.DOT_COUNT' "$root_dir/components/DotStrip.qml" \
-  || fail "DotStrip.qml must build its dots from DotsModel.DOT_COUNT"
-grep -q 'model: DotsModel.DOT_COUNT' "$root_dir/Service.qml" \
-  || fail "Service.qml must build its FileViews from DotsModel.DOT_COUNT"
-grep -q 'DotsModel.DOT_COUNT' "$root_dir/Service.qml" || fail "Service.qml ignores DOT_COUNT"
-pass "the dot count comes only from DotsModel.DOT_COUNT"
+grep -q 'model: SevenModel.DOT_COUNT' "$root_dir/components/DotStrip.qml" \
+  || fail "DotStrip.qml must build its dots from SevenModel.DOT_COUNT"
+grep -q 'model: SevenModel.DOT_COUNT' "$root_dir/Service.qml" \
+  || fail "Service.qml must build its FileViews from SevenModel.DOT_COUNT"
+grep -q 'SevenModel.DOT_COUNT' "$root_dir/Service.qml" || fail "Service.qml ignores DOT_COUNT"
+pass "the dot count comes only from SevenModel.DOT_COUNT"
+
+# The shortcut is registered at runtime through this file; the service builds a
+# `hyprctl eval` command around its path, so a rename breaks the binding
+# silently.
+[[ -f $root_dir/hypr/seven.lua ]] || fail "hypr/seven.lua is missing"
+grep -q 'hypr/seven.lua' "$root_dir/Service.qml" || fail "Service.qml does not load hypr/seven.lua"
+grep -q 'description = DESCRIPTION' "$root_dir/hypr/seven.lua" \
+  || fail "the bind must carry a description or it will not appear in the SUPER+K menu"
+pass "the runtime shortcut is wired to hypr/seven.lua with a description"
+
+# Tab is an editing key again. If it ever goes back to toggling the preview,
+# indenting a markdown list becomes impossible.
+if grep -qE 'Qt\.Key_(Tab|Backtab)' "$root_dir/Panel.qml" "$root_dir/components/DotEditor.qml"; then
+  fail "Tab is bound in the panel; it should stay an ordinary editing key"
+fi
+grep -q 'Qt.Key_P' "$root_dir/components/DotEditor.qml" || fail "Alt+P is not bound in the editor"
+grep -q 'Qt.Key_P' "$root_dir/Panel.qml" || fail "Alt+P is not bound in the preview"
+pass "Alt+P toggles the preview and Tab is left to the editor"
+
+# Without this, the bar repaints the dot in the urgent colour whenever the panel
+# is open, which erases the note colour exactly when you are looking at it.
+grep -q 'useActiveColor: !root.config.colorfulDot' "$root_dir/Panel.qml" \
+  || fail "the coloured bar dot must opt out of the bar's active tint"
+pass "a coloured bar dot keeps its hue while the panel is open"
 
 # --- hygiene ------------------------------------------------------------------
 

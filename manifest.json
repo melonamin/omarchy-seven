@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "melonamin.dots",
-  "name": "Dots",
+  "id": "melonamin.seven",
+  "name": "Seven",
   "version": "0.1.0",
   "author": "melonamin",
   "description": "Seven notes. No titles, no files, no fuss.",
-  "homepage": "https://github.com/melonamin/omarchy-dots",
+  "homepage": "https://github.com/melonamin/omarchy-seven",
   "license": "MIT",
   "kinds": [
     "service",
@@ -17,14 +17,15 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Dots",
+    "displayName": "Seven",
     "description": "Seven scratch notes, always one keystroke away",
     "category": "Notes",
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
       "monospace": true,
-      "showCounts": true
+      "showCounts": true,
+      "colorfulDot": true
     },
     "schema": [
       {
@@ -36,6 +37,11 @@
         "key": "showCounts",
         "type": "boolean",
         "label": "Show word and character counts"
+      },
+      {
+        "key": "colorfulDot",
+        "type": "boolean",
+        "label": "Colour the bar dot to match the active note"
       }
     ]
   }

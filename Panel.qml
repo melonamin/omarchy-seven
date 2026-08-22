@@ -3,7 +3,7 @@ import QtQuick.Controls
 import Quickshell
 import qs.Commons
 import qs.Ui
-import "DotsModel.js" as DotsModel
+import "SevenModel.js" as SevenModel
 import "components"
 
 // Bar button plus the dropdown that holds the notes.
@@ -19,20 +19,20 @@ import "components"
 Panel {
   id: root
 
-  moduleName: DotsModel.PLUGIN_ID
-  // The service owns the single "dots" IPC target; a per-monitor panel
+  moduleName: SevenModel.PLUGIN_ID
+  // The service owns the single "seven" IPC target; a per-monitor panel
   // registering it would mean duplicate handlers fighting over one route.
   manageIpc: false
 
   readonly property var service: bar && bar.shell && typeof bar.shell.serviceFor === "function"
-    ? bar.shell.serviceFor(DotsModel.PLUGIN_ID)
+    ? bar.shell.serviceFor(SevenModel.PLUGIN_ID)
     : null
 
-  readonly property var config: DotsModel.settingsFromEntry(settings)
+  readonly property var config: SevenModel.settingsFromEntry(settings)
   readonly property int activeIndex: service ? service.activeIndex : 0
   readonly property var filled: service ? service.filled : []
   readonly property string activeText: service ? service.textAt(activeIndex) : ""
-  readonly property color activeHue: DotsModel.colorFor(activeIndex)
+  readonly property color activeHue: SevenModel.colorFor(activeIndex)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   // Which half of the dot is showing. Always resets to editing on open: the
@@ -47,7 +47,7 @@ Panel {
   }
 
   function stepDot(delta) {
-    selectDot(DotsModel.stepIndex(activeIndex, delta))
+    selectDot(SevenModel.stepIndex(activeIndex, delta))
   }
 
   // The editor's text is assigned, not bound: a binding to the service would
@@ -110,13 +110,21 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    // A single dot, in the active dot's colour: filled when that dot has
-    // something in it, hollow when it doesn't. The bar says which note you
-    // are on and whether it is empty, and nothing else.
-    text: root.filled[root.activeIndex] === true ? "●" : "○"
-    foreground: root.activeHue
+    // Two presentations, per the colourfulDot setting. Coloured: the dot takes
+    // the active note's hue and goes hollow when that note is empty, so the bar
+    // says which note you are on and whether there is anything in it. Plain: a
+    // solid dot in the bar's own foreground, indistinguishable from every other
+    // item up there.
+    text: root.config.colorfulDot && root.filled[root.activeIndex] !== true ? "○" : "●"
+    foreground: root.config.colorfulDot ? root.activeHue : root.barForeground
     active: root.opened
-    tooltipText: DotsModel.tooltipFor(root.service ? root.service.texts : [], root.activeIndex)
+    // While a widget's panel is open the bar normally repaints its label in the
+    // urgent colour. For a coloured dot that would throw away the one thing the
+    // dot is there to say -- which note you are on -- and the open state is
+    // already drawn as the underline beneath it. A plain dot is asked to behave
+    // like every other bar item, so it keeps the tint.
+    useActiveColor: !root.config.colorfulDot
+    tooltipText: SevenModel.tooltipFor(root.service ? root.service.texts : [], root.activeIndex)
 
     onPressed: function(b) {
       if (b === Qt.RightButton) root.stepDot(1)
@@ -158,7 +166,7 @@ Panel {
           event.accepted = true
           return
         }
-        if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+        if (event.key === Qt.Key_P && (event.modifiers & Qt.AltModifier)) {
           root.togglePreview()
           event.accepted = true
           return
@@ -185,31 +193,21 @@ Panel {
         width: parent.width
         spacing: Style.space(9)
 
-        // ---------- Dots + which one you are on ----------
+        // ---------- The dots ----------
+        // No "which dot" caption: the ring around the active dot already says
+        // it, and the number was a label for something the eye reads faster.
         Item {
           width: parent.width
           implicitHeight: dotStrip.implicitHeight
 
           DotStrip {
             id: dotStrip
-            anchors.left: parent.left
+            anchors.horizontalCenter: parent.horizontalCenter
             anchors.verticalCenter: parent.verticalCenter
             filled: root.filled
             activeIndex: root.activeIndex
             foreground: Color.popups.text
             onSelected: function(index) { root.selectDot(index) }
-          }
-
-          Text {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.previewing ? "PREVIEW" : "DOT " + (root.activeIndex + 1)
-            textFormat: Text.PlainText
-            color: root.previewing ? root.activeHue : Util.alpha(Color.popups.text, 0.5)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            font.letterSpacing: 1.1
-            font.bold: true
           }
         }
 
@@ -272,7 +270,7 @@ Panel {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             visible: root.config.showCounts
-            text: DotsModel.countsLabel(root.activeText)
+            text: SevenModel.countsLabel(root.activeText)
             textFormat: Text.PlainText
             color: Util.alpha(Color.popups.text, 0.55)
             font.family: root.fontFamily
@@ -283,7 +281,7 @@ Panel {
             id: hint
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.previewing ? "Tab edit · Esc close" : "Tab preview · Alt+1-7 dots · Esc close"
+            text: root.previewing ? "Alt+P edit · Esc close" : "Alt+P preview · Alt+1-7 dots · Esc close"
             textFormat: Text.PlainText
             color: Util.alpha(Color.popups.text, 0.38)
             font.family: root.fontFamily

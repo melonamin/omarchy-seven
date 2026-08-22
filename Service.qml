@@ -1,7 +1,8 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
-import "DotsModel.js" as DotsModel
+import "SevenModel.js" as SevenModel
 
 // Owner of the seven notes.
 //
@@ -11,7 +12,7 @@ import "DotsModel.js" as DotsModel
 // closing, which is the entire point of a scratchpad.
 //
 // On disk each dot is its own plain file (`1.md` ... `7.md`) under
-// $XDG_DATA_HOME/omarchy-dots/dots. Plain files, plainly named, so `grep`,
+// $XDG_DATA_HOME/omarchy-seven/dots. Plain files, plainly named, so `grep`,
 // `nvim`, Syncthing, and `git` all work on them without this plugin's help.
 Item {
   id: root
@@ -19,14 +20,24 @@ Item {
   property var shell: null
   property var manifest: null
 
-  readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : DotsModel.PLUGIN_ID
+  readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : SevenModel.PLUGIN_ID
+  readonly property string sourceDir: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
+  readonly property string luaPath: sourceDir ? sourceDir + "/hypr/seven.lua" : ""
+  readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
   readonly property string home: Quickshell.env("HOME")
-  readonly property string dotsDir: DotsModel.dotsDir(home, Quickshell.env("XDG_DATA_HOME"))
-  readonly property string statePath: DotsModel.dotsDir(home, Quickshell.env("XDG_DATA_HOME"))
+  readonly property string dotsDir: SevenModel.dotsDir(home, Quickshell.env("XDG_DATA_HOME"))
+  readonly property string statePath: SevenModel.dotsDir(home, Quickshell.env("XDG_DATA_HOME"))
     .replace(/\/dots$/, "") + "/active"
 
   // The live text of all seven dots. Replaced wholesale (never mutated in
   // place) so QML property bindings on `texts` actually re-evaluate.
+  // Read from shell.json rather than injected by the bar: the global shortcut
+  // belongs to the plugin as a whole, not to one monitor's bar widget.
+  property var settings: SevenModel.settingsFromEntry(null)
+  readonly property string requestedShortcut: String(settings.shortcut || "")
+  property bool shortcutRegistered: false
+  property string shortcutDiagnostic: ""
+
   property var texts: ["", "", "", "", "", "", ""]
   property int activeIndex: 0
   property bool ready: false
@@ -40,8 +51,8 @@ Item {
   // our own write echoing back; anything else is a genuine external edit.
   property var lastWritten: ({})
 
-  readonly property var filled: DotsModel.filledFlags(texts)
-  readonly property int filledCount: DotsModel.filledCount(texts)
+  readonly property var filled: SevenModel.filledFlags(texts)
+  readonly property int filledCount: SevenModel.filledCount(texts)
 
   // Bumped whenever a dot's text changes from outside the editor (disk edit,
   // IPC append, clear). Panels watch this to resync an unfocused editor.
@@ -50,11 +61,11 @@ Item {
   signal dotChangedExternally(int index)
 
   function textAt(index) {
-    return String(texts[DotsModel.clampIndex(index)] || "")
+    return String(texts[SevenModel.clampIndex(index)] || "")
   }
 
   function setActiveIndex(index) {
-    var next = DotsModel.clampIndex(index)
+    var next = SevenModel.clampIndex(index)
     if (next === activeIndex) return
     activeIndex = next
     activeSaveTimer.restart()
@@ -63,8 +74,8 @@ Item {
   // Called on every keystroke from the editor. Cheap on purpose: swap the
   // array, mark the dot dirty, and let the debounce timer do the I/O.
   function setText(index, text) {
-    var slot = DotsModel.clampIndex(index)
-    var value = DotsModel.normalize(text)
+    var slot = SevenModel.clampIndex(index)
+    var value = SevenModel.normalize(text)
     if (String(texts[slot]) === value) return
 
     var next = texts.slice()
@@ -80,14 +91,14 @@ Item {
   }
 
   function appendText(index, addition) {
-    var slot = DotsModel.clampIndex(index)
-    setText(slot, DotsModel.appendText(textAt(slot), addition))
+    var slot = SevenModel.clampIndex(index)
+    setText(slot, SevenModel.appendText(textAt(slot), addition))
     revision++
     dotChangedExternally(slot)
   }
 
   function clearDot(index) {
-    var slot = DotsModel.clampIndex(index)
+    var slot = SevenModel.clampIndex(index)
     setText(slot, "")
     revision++
     dotChangedExternally(slot)
@@ -95,13 +106,13 @@ Item {
 
   // Where unaddressed text goes: the first empty dot, matching Tot.
   function captureIndex() {
-    return DotsModel.firstBlankIndex(texts)
+    return SevenModel.firstBlankIndex(texts)
   }
 
   function flush() {
     for (var key in dirty) {
       if (!dirty[key]) continue
-      var slot = DotsModel.clampIndex(key)
+      var slot = SevenModel.clampIndex(key)
       var file = dotFiles.objectAt(slot)
       if (!file) continue
       var value = String(texts[slot] || "")
@@ -120,14 +131,14 @@ Item {
   // A reload landed. Decide whether it is our own write coming back, or a real
   // edit somebody made in another editor.
   function adoptFromDisk(index, raw) {
-    var slot = DotsModel.clampIndex(index)
-    var value = DotsModel.normalize(raw)
+    var slot = SevenModel.clampIndex(index)
+    var value = SevenModel.normalize(raw)
 
     // Mid-edit: our in-memory copy is newer, and flush() will overwrite the
     // file shortly. Dropping the reload is what protects the typing cursor.
     if (dirty[slot]) return
 
-    if (lastWritten[slot] !== undefined && DotsModel.normalize(lastWritten[slot]) === value) {
+    if (lastWritten[slot] !== undefined && SevenModel.normalize(lastWritten[slot]) === value) {
       // Our own write, echoed back by the watcher. Keep the trailing-newline
       // form out of the editor but change nothing else.
       var same = texts.slice()
@@ -148,7 +159,7 @@ Item {
     // Give mkdir a turn of the event loop before the FileViews reach for
     // files inside a directory that may not exist yet on a first run.
     Qt.callLater(function() {
-      for (var i = 0; i < DotsModel.DOT_COUNT; i++) {
+      for (var i = 0; i < SevenModel.DOT_COUNT; i++) {
         var file = dotFiles.objectAt(i)
         if (file) file.reload()
       }
@@ -184,12 +195,12 @@ Item {
   // show up in the panel without a shell restart.
   Instantiator {
     id: dotFiles
-    model: DotsModel.DOT_COUNT
+    model: SevenModel.DOT_COUNT
 
     delegate: FileView {
       required property int index
 
-      path: root.dotsDir + "/" + DotsModel.fileNameFor(index)
+      path: root.dotsDir + "/" + SevenModel.fileNameFor(index)
       watchChanges: true
       atomicWrites: true
       printErrors: false
@@ -212,16 +223,139 @@ Item {
     printErrors: false
 
     onLoaded: {
-      var parsed = DotsModel.indexFromNumber(String(text()).trim())
+      var parsed = SevenModel.indexFromNumber(String(text()).trim())
       if (parsed >= 0) root.activeIndex = parsed
     }
     onLoadFailed: {}
   }
 
+  // ------------------------------------------------------------- shortcut
+  //
+  // The binding is registered at runtime through `hyprctl eval`, the same way
+  // Compose does it, so no Hyprland configuration file is ever edited. It
+  // carries a description, which is what puts it in Omarchy's keybindings menu
+  // (SUPER + K).
+
+  readonly property string shortcutDescription: "Seven notes"
+
+  function applyConfig(raw) {
+    var parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      console.warn("seven: could not parse shell.json:", error)
+      return
+    }
+    var next = SevenModel.settingsFromEntry(SevenModel.findSettingsEntry(parsed, pluginId))
+    var changed = next.shortcut !== settings.shortcut
+    settings = next
+    if (changed && luaPath) installBinds(false)
+  }
+
+  function luaQuote(value) {
+    return "'" + String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'"
+  }
+
+  function installBinds(afterReload) {
+    if (!luaPath) return
+    if (binder.running) {
+      binder.queued = true
+      if (afterReload) binder.queuedStale = true
+      return
+    }
+    binder.command = ["hyprctl", "-i", "0", "eval",
+      "dofile(" + luaQuote(luaPath) + "); omarchy_seven.install("
+        + luaQuote(requestedShortcut) + ", " + (afterReload ? "true" : "false") + ")"]
+    binder.running = true
+  }
+
+  onLuaPathChanged: if (luaPath) installBinds(false)
+
+  FileView {
+    path: root.configPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.applyConfig(text())
+    // No shell.json yet, or none readable: the defaults already stand.
+    onLoadFailed: root.settings = SevenModel.settingsFromEntry(null)
+  }
+
+  Process {
+    id: binder
+    property bool queued: false
+    property bool queuedStale: false
+    onExited: function(code) {
+      if (code !== 0) {
+        root.shortcutDiagnostic = "Could not register the shortcut"
+        console.warn("seven: hyprctl eval failed with", code)
+      } else if (!shortcutCheck.running) {
+        shortcutCheck.running = true
+      }
+      if (queued) {
+        queued = false
+        var stale = queuedStale
+        queuedStale = false
+        root.installBinds(stale)
+      }
+    }
+  }
+
+  // Confirms the bind is actually on the chord we asked for, and notices when
+  // something else already owns it -- a silently-dead shortcut is worse than a
+  // reported one.
+  Process {
+    id: shortcutCheck
+    command: ["hyprctl", "-i", "0", "binds", "-j"]
+    stdout: StdioCollector { id: shortcutOutput; waitForEnd: true }
+    onExited: function(code) {
+      if (code !== 0) return
+      var bindings = []
+      try {
+        bindings = JSON.parse(String(shortcutOutput.text || "[]"))
+      } catch (error) {
+        return
+      }
+      var state = SevenModel.shortcutState(bindings, root.requestedShortcut, root.shortcutDescription)
+      root.shortcutRegistered = root.requestedShortcut !== "" && state.found && !state.collision
+      if (root.requestedShortcut === "") root.shortcutDiagnostic = "Shortcut disabled"
+      else if (state.collision) root.shortcutDiagnostic = "Shortcut collision: " + root.requestedShortcut
+      else if (!state.found) root.shortcutDiagnostic = "Shortcut is not registered"
+      else root.shortcutDiagnostic = ""
+    }
+  }
+
+  // A config reload drops every runtime bind, so put ours back.
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event.name === "configreloaded") reinstall.restart()
+    }
+  }
+
+  Timer {
+    id: reinstall
+    interval: 400
+    onTriggered: root.installBinds(true)
+  }
+
+  // Backstop for the cases the event connection misses -- a compositor restart,
+  // or a stale inherited instance signature that never delivers the event.
+  Timer {
+    interval: 15000
+    repeat: true
+    running: root.luaPath !== ""
+    onTriggered: {
+      if (shortcutCheck.running || binder.running) return
+      if (root.requestedShortcut !== "" && !root.shortcutRegistered) root.installBinds(true)
+      else shortcutCheck.running = true
+    }
+  }
+
   // Single IPC surface for the plugin. It lives on the service, not the panel,
   // because the panel exists once per monitor and would register duplicates.
   IpcHandler {
-    target: "dots"
+    target: "seven"
 
     function open(): void {
       if (root.shell && typeof root.shell.summon === "function") root.shell.summon(root.pluginId, "")
@@ -235,17 +369,17 @@ Item {
       if (root.shell && typeof root.shell.toggle === "function") root.shell.toggle(root.pluginId, "")
     }
 
-    // Reads print the dot verbatim so `omarchy-shell dots read 3 | wc -l` is
+    // Reads print the dot verbatim so `omarchy-shell seven read 3 | wc -l` is
     // honest about the content.
     function read(dot: string): string {
-      var index = DotsModel.indexFromNumber(dot)
-      if (index < 0) return "error: dot must be 1-" + DotsModel.DOT_COUNT
+      var index = SevenModel.indexFromNumber(dot)
+      if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
       return root.textAt(index)
     }
 
     function append(dot: string, text: string): string {
-      var index = DotsModel.indexFromNumber(dot)
-      if (index < 0) return "error: dot must be 1-" + DotsModel.DOT_COUNT
+      var index = SevenModel.indexFromNumber(dot)
+      if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
       root.appendText(index, text)
       return "ok"
     }
@@ -259,15 +393,15 @@ Item {
     }
 
     function clear(dot: string): string {
-      var index = DotsModel.indexFromNumber(dot)
-      if (index < 0) return "error: dot must be 1-" + DotsModel.DOT_COUNT
+      var index = SevenModel.indexFromNumber(dot)
+      if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
       root.clearDot(index)
       return "ok"
     }
 
     function show(dot: string): string {
-      var index = DotsModel.indexFromNumber(dot)
-      if (index < 0) return "error: dot must be 1-" + DotsModel.DOT_COUNT
+      var index = SevenModel.indexFromNumber(dot)
+      if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
       root.setActiveIndex(index)
       if (root.shell && typeof root.shell.summon === "function") root.shell.summon(root.pluginId, "")
       return "ok"
@@ -281,6 +415,9 @@ Item {
         dir: root.dotsDir,
         active: root.activeIndex + 1,
         filled: root.filledCount,
+        shortcut: root.requestedShortcut,
+        shortcutRegistered: root.shortcutRegistered,
+        diagnostic: root.shortcutDiagnostic,
         counts: root.texts.map(function(value) { return String(value || "").length })
       })
     }

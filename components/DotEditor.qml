@@ -68,12 +68,12 @@ ScrollView {
         event.accepted = true
         return
       }
-      if (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ShiftModifier)) {
-        root.previewRequested()
-        event.accepted = true
-        return
-      }
       if (event.modifiers & Qt.AltModifier) {
+        if (event.key === Qt.Key_P) {
+          root.previewRequested()
+          event.accepted = true
+          return
+        }
         if (event.key >= Qt.Key_1 && event.key <= Qt.Key_7) {
           root.dotRequested(event.key - Qt.Key_1)
           event.accepted = true
