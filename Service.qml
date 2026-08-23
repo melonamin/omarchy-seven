@@ -320,6 +320,17 @@ Item {
       }
 
       function setText(value) {
+        // Emptying a note does not go through FileView.
+        //
+        // FileView skips a write whose text equals its own cached copy, and
+        // since reads moved off it that cache is always empty -- so writing ""
+        // through it is silently a no-op and clearing a note never reaches
+        // disk. Truncating directly has no such opinion. There is no partial
+        // state to protect here either: the file ends up old or empty.
+        if (value === "") {
+          truncater.running = true
+          return
+        }
         file.setText(value)
       }
 
@@ -332,6 +343,11 @@ Item {
         printErrors: false
 
         onFileChanged: slot.reload()
+      }
+
+      Process {
+        id: truncater
+        command: ["bash", "-c", ': > "$1"', "--", slot.filePath]
       }
 
       Process {

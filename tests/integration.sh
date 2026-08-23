@@ -119,6 +119,41 @@ counts=$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["counts"]))
 grep -q "no dot number given" <<<"$status" && fail "status leaked note content"
 pass "status reports all seven dots without leaking their content"
 
+# --- clearing reaches disk ----------------------------------------------------
+
+# Clearing a note must empty the file, not just the copy in memory. FileView
+# skips a write whose text matches its cached copy, and that cache is empty
+# because reads do not go through it -- so routing "" through FileView made
+# clear a no-op on disk, and the note came back on the next read.
+printf 'content written from outside\n' > "$dots_dir/5.md"
+for _ in 1 2 3 4 5 6; do
+  sleep 0.4
+  [[ $(omarchy-shell seven read 5) == "content written from outside" ]] && break
+done
+[[ $(omarchy-shell seven read 5) == "content written from outside" ]] \
+  || fail "could not seed dot 5 from outside"
+
+[[ $(omarchy-shell seven clear 5) == ok ]] || fail "clear reported failure"
+for _ in 1 2 3 4 5 6 7 8; do
+  sleep 0.4
+  [[ $(stat -c %s "$dots_dir/5.md") == 0 ]] && break
+done
+[[ $(stat -c %s "$dots_dir/5.md") == 0 ]] \
+  || fail "clear left $(stat -c %s "$dots_dir/5.md") bytes on disk; it only cleared memory"
+[[ -z $(omarchy-shell seven read 5) ]] || fail "clear did not empty the note"
+pass "clearing a note empties the file, not just the copy in memory"
+
+# The dot must then look empty to capture, which is what makes
+# "clear 1 && capture" land where you expect.
+printf 'x\n' > "$dots_dir/1.md"
+sleep 1
+omarchy-shell -q seven clear 1 >/dev/null
+sleep 1.2
+target=$(omarchy-shell seven capture "capture probe")
+[[ $target == 1 ]] \
+  || fail "capture went to dot $target after clearing dot 1; the cleared dot did not read as empty"
+pass "a cleared dot is the one capture picks"
+
 # --- shortcut -----------------------------------------------------------------
 
 status=$(omarchy-shell seven status)

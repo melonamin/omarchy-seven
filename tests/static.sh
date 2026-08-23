@@ -242,6 +242,13 @@ grep -q 'readOnly: root.activeOversized' "$root_dir/Panel.qml" \
   || fail "the editor is not read-only for a note that was refused"
 pass "a refused note is never edited or written back"
 
+# FileView skips a write matching its cached copy, and that cache stays empty
+# now that reads do not go through it -- so an empty write through FileView
+# silently does nothing and clearing a note never reaches disk.
+sed -n '/function setText(value)/,/^      }/p' "$root_dir/Service.qml" | grep -q 'value === ""' \
+  || fail "emptying a note still goes through FileView.setText, which skips it"
+pass "emptying a note bypasses FileView's write-skipping"
+
 # --- hygiene ------------------------------------------------------------------
 
 link=$(find "$root_dir" -name .git -prune -o -type l -print -quit)
