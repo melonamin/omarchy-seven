@@ -9,7 +9,7 @@ Inspired by [Tot](https://tot.rocks) by The Iconfactory, which had the good
 idea first. This is an independent implementation for Omarchy and is not
 affiliated with or endorsed by The Iconfactory.
 
-![Seven, editing and previewing a note](preview.png)
+![Seven open on a note, with the seven dots above it](preview.png)
 
 ## Features
 
