@@ -31,6 +31,10 @@ Panel {
   readonly property int activeIndex: service ? service.activeIndex : 0
   readonly property var filled: service ? service.filled : []
   readonly property string activeText: service ? service.textAt(activeIndex) : ""
+  // A note whose file was too large to read. The editor shows why instead of
+  // the note, and refuses edits, because saving would overwrite a file Seven
+  // deliberately never read.
+  readonly property bool activeOversized: service ? service.isOversized(activeIndex) : false
   readonly property color activeHue: SevenModel.colorFor(activeIndex)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -69,7 +73,14 @@ Panel {
   // leaves the old note on screen under the new dot's number, and the next
   // keystroke saves it into the wrong dot.
   function loadActiveIntoEditor() {
-    editor.text = root.service ? root.service.textAt(root.service.activeIndex) : ""
+    if (!root.service) {
+      editor.text = ""
+      return
+    }
+    var index = root.service.activeIndex
+    editor.text = root.service.isOversized(index)
+      ? SevenModel.oversizedNotice(index, root.service.oversizedBytes(index))
+      : root.service.textAt(index)
   }
 
   // Refill the editor when a dot is rewritten under an open panel, putting the
@@ -138,6 +149,9 @@ Panel {
     if (opened) {
       previewing = false
       helpOpen = false
+      // Cheap and bounded, and it means a note that was refused for being too
+      // large recovers as soon as the file shrinks, without a restart.
+      if (service) service.reloadDot(service.activeIndex)
       loadActiveIntoEditor()
       focusSoon()
     } else if (service) {
@@ -328,11 +342,12 @@ Panel {
             // whether typing worked after leaving the preview.
             foreground: Color.popups.text
             monospace: root.config.monospace
+            readOnly: root.activeOversized
 
             // Same reason as loadActiveIntoEditor: the service's own index is
             // the authority on which dot this text belongs to.
             onEdited: function(text) {
-              if (root.service) root.service.setText(root.service.activeIndex, text)
+              if (root.service && !root.activeOversized) root.service.setText(root.service.activeIndex, text)
             }
             onCloseRequested: root.dismiss()
             onHelpRequested: root.toggleHelp()
@@ -350,7 +365,9 @@ Panel {
             // what that markdown references even when nothing is drawn, so a
             // note left unread would otherwise reach out the moment the panel
             // opened on any note at all.
-            source: root.previewing ? SevenModel.previewSource(root.activeText) : ""
+            source: root.previewing && !root.activeOversized
+              ? SevenModel.previewSource(root.activeText)
+              : ""
 
             onLinkActivated: function(url) {
               // A note chooses both the label and the target, so the reader
@@ -386,7 +403,9 @@ Panel {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             visible: root.config.showCounts
-            text: SevenModel.countsLabel(root.activeText)
+            text: root.activeOversized
+              ? SevenModel.formatBytes(root.service ? root.service.oversizedBytes(root.activeIndex) : 0) + " · not loaded"
+              : SevenModel.countsLabel(root.activeText)
             textFormat: Text.PlainText
             color: Util.alpha(Color.popups.text, 0.55)
             font.family: root.fontFamily

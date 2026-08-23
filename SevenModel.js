@@ -78,14 +78,21 @@ function isBlank(text) {
 
 // A dot is "filled" when it holds anything at all -- that is what the bar's
 // solid-vs-hollow dot reports, so whitespace-only must read as empty.
-function filledFlags(texts) {
+//
+// A note too large to load counts as filled. Its text is empty here because
+// Seven declined to read it, but the file is emphatically not, and drawing it
+// as an empty dot would invite someone to type over it.
+function filledFlags(texts, oversized) {
+  var refused = oversized && typeof oversized === "object" ? oversized : {}
   var result = []
-  for (var i = 0; i < DOT_COUNT; i++) result.push(!isBlank(texts && texts[i]))
+  for (var i = 0; i < DOT_COUNT; i++) {
+    result.push(refused[i] !== undefined || !isBlank(texts && texts[i]))
+  }
   return result
 }
 
-function filledCount(texts) {
-  var flags = filledFlags(texts)
+function filledCount(texts, oversized) {
+  var flags = filledFlags(texts, oversized)
   var count = 0
   for (var i = 0; i < flags.length; i++) if (flags[i]) count++
   return count
@@ -128,6 +135,63 @@ function plural(count, word) {
 
 function countsLabel(text) {
   return plural(countWords(text), "word") + " · " + plural(countChars(text), "char")
+}
+
+// Largest note Seven will read into memory.
+//
+// The shell is a long-lived process that also draws the bar, the lock screen,
+// and the notification stack; a note that exhausts it takes the desktop with
+// it. These files are externally editable and may be synced from elsewhere, so
+// their size is not ours to assume. A scratchpad note is a few hundred bytes;
+// a megabyte is already absurd, and seven of them is a bounded 7 MiB.
+var MAX_NOTE_BYTES = 1048576
+
+function isOversized(byteLength) {
+  return Number(byteLength) > MAX_NOTE_BYTES
+}
+
+function formatBytes(value) {
+  var bytes = Number(value)
+  if (!isFinite(bytes) || bytes < 0) return "0 B"
+  if (bytes < 1024) return bytes + " B"
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KiB"
+  return (bytes / 1048576).toFixed(1) + " MiB"
+}
+
+// What the panel shows in place of a note it refused to load.
+function oversizedNotice(index, byteLength) {
+  return "Dot " + (clampIndex(index) + 1) + " is " + formatBytes(byteLength)
+    + ", over the " + formatBytes(MAX_NOTE_BYTES) + " limit, so it was not loaded.\n\n"
+    + "Seven will not edit or overwrite it. Open the file directly:\n"
+    + fileNameFor(index)
+}
+
+// The bounded reader's first line is "<counted> <reported>", then at most
+// MAX_NOTE_BYTES of content. Splitting at that newline gives all three without
+// trusting the content to avoid any particular delimiter.
+//
+// `counted` comes from the bounded stream and is what decides whether the file
+// is taken -- it can never exceed the limit by more than a byte, so there is no
+// size to trust and no window to race. `reported` comes from stat, which reads
+// nothing, and exists only so the message can say how big the file actually is
+// rather than "1 MiB" for everything from one megabyte to a terabyte.
+function parseBoundedRead(output) {
+  var raw = string(output)
+  var newline = raw.indexOf("\n")
+  if (newline < 0) return { bytes: 0, reportedBytes: 0, text: "", valid: false }
+  var header = raw.slice(0, newline).trim().split(/\s+/)
+  var counted = Number(header[0])
+  if (!isFinite(counted) || counted < 0) {
+    return { bytes: 0, reportedBytes: 0, text: "", valid: false }
+  }
+  var reported = Number(header[1])
+  if (!isFinite(reported) || reported < counted) reported = counted
+  return {
+    bytes: counted,
+    reportedBytes: reported,
+    text: raw.slice(newline + 1),
+    valid: true
+  }
 }
 
 // ------------------------------------------------------------ untrusted text
@@ -642,6 +706,11 @@ if (typeof module !== "undefined" && module.exports) {
     isSafeLink: isSafeLink,
     appendText: appendText,
     normalize: normalize,
+    MAX_NOTE_BYTES: MAX_NOTE_BYTES,
+    isOversized: isOversized,
+    formatBytes: formatBytes,
+    oversizedNotice: oversizedNotice,
+    parseBoundedRead: parseBoundedRead,
     settingsFromEntry: settingsFromEntry,
     withSetting: withSetting,
     newlineEdit: newlineEdit,

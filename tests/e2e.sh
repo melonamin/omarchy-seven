@@ -535,6 +535,64 @@ CURSOR
   rm -rf "$beacon_dir"
 fi
 
+# --- a note too large to load -----------------------------------------------
+#
+# These files are externally editable and may be synced from another machine,
+# so their size is not Seven's to assume. Reading one in full would let a note
+# exhaust the shell process, which also owns the bar, the lock screen and the
+# notification stack. Nothing unbounded is read, so this costs a fixed
+# megabyte no matter how large the file is.
+
+limit=$(omarchy-shell seven status | python3 -c 'import json,sys; print(json.load(sys.stdin)["limitBytes"])')
+[[ -n $limit ]] || fail "status does not report the note size limit"
+
+shell_pid=$(pgrep -f 'quickshell -n' | head -1)
+rss_before=$(awk '/VmRSS/{print $2}' "/proc/$shell_pid/status" 2>/dev/null || echo 0)
+
+# 64 MiB is far past the limit and quick to write.
+dd if=/dev/zero bs=1M count=64 2>/dev/null | tr '\0' 'A' > "$dots_dir/6.md"
+for _ in 1 2 3 4 5 6 7 8; do
+  sleep 0.5
+  [[ $(omarchy-shell seven read 6) == error:* ]] && break
+done
+
+[[ $(omarchy-shell seven read 6) == *"over the"* ]] \
+  || fail "an oversized note was not refused, read returned: $(omarchy-shell seven read 6 | head -c 60)"
+pass "a note past the size limit is refused rather than loaded"
+
+rss_after=$(awk '/VmRSS/{print $2}' "/proc/$shell_pid/status" 2>/dev/null || echo 0)
+growth=$(( rss_after - rss_before ))
+# A full read would show up as tens of thousands of kB. Allow generous slack
+# for unrelated shell activity while still catching a materialised file.
+[[ $growth -lt 32768 ]] \
+  || fail "the shell grew ${growth} kB reading a 64 MiB note; it was materialised"
+pass "the shell did not grow to hold it (${growth} kB)"
+
+[[ $(json_get filled <<<"$(omarchy-shell seven status)") -ge 1 ]] \
+  || fail "a refused note should still count as a filled dot"
+pass "a refused note reads as filled, not empty"
+
+# Nothing may write over a file Seven never read.
+size_before=$(stat -c %s "$dots_dir/6.md")
+[[ $(omarchy-shell seven append 6 "x") == error:* ]] || fail "append touched a refused note"
+[[ $(omarchy-shell seven clear 6) == error:* ]] || fail "clear touched a refused note"
+open_on 6 || fail "the panel did not open on the refused note"
+wtype "THIS MUST NOT BE SAVED"
+sleep 2
+omarchy-shell -q seven close >/dev/null 2>&1 || true
+await_closed || true
+[[ $(stat -c %s "$dots_dir/6.md") == "$size_before" ]] \
+  || fail "the refused note was modified; it must be left exactly as found"
+pass "a refused note is never appended to, cleared, or typed over"
+
+rm -f "$dots_dir/6.md"
+for _ in 1 2 3 4 5 6; do
+  sleep 0.5
+  [[ -z $(omarchy-shell seven read 6) ]] && break
+done
+[[ -z $(omarchy-shell seven read 6) ]] || fail "removing the oversized file did not clear the refusal"
+pass "removing the file lets the dot recover"
+
 # --- the cheat sheet --------------------------------------------------------
 
 await_empty 7 || fail "dot 7 did not empty before the cheat-sheet checks"

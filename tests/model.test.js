@@ -565,3 +565,50 @@ test("only browser and mail schemes are handed to xdg-open", () => {
     assert.equal(model.isSafeLink(url), false, `${url} should be refused`)
   }
 })
+
+test("a note too large to load still reads as a filled dot", () => {
+  // Its text is empty because Seven declined to read it; the file is not, and
+  // an empty-looking dot would invite typing over it.
+  const texts = ["", "", "", "", "", "", ""]
+  const refused = { 2: 536870912 }
+  assert.deepEqual(model.filledFlags(texts, refused),
+    [false, false, true, false, false, false, false])
+  assert.equal(model.filledCount(texts, refused), 1)
+  // Still works with no oversized map at all.
+  assert.equal(model.filledCount(["a", "", "", "", "", "", ""]), 1)
+})
+
+test("the bounded reader's header carries both the counted and the real size", () => {
+  // The counted value comes off a stream capped at the limit and is what
+  // decides; the reported value comes from stat and only names the size.
+  const big = model.parseBoundedRead("1048577 536870912\nAAAA")
+  assert.equal(big.bytes, 1048577)
+  assert.equal(big.reportedBytes, 536870912)
+  assert.equal(model.isOversized(big.bytes), true)
+
+  const small = model.parseBoundedRead("12 12\nhello world\n")
+  assert.equal(small.bytes, 12)
+  assert.equal(model.isOversized(small.bytes), false)
+  assert.equal(small.text, "hello world\n")
+
+  // Content containing newlines survives: only the first newline is a boundary.
+  assert.equal(model.parseBoundedRead("5 5\na\nb\nc").text, "a\nb\nc")
+  // A header without the stat value still parses.
+  assert.equal(model.parseBoundedRead("5\nhello").reportedBytes, 5)
+  // Garbage is refused rather than read as an empty note.
+  assert.equal(model.parseBoundedRead("nonsense\nx").valid, false)
+  assert.equal(model.parseBoundedRead("").valid, false)
+  // A reported size smaller than what was counted is not trusted.
+  assert.equal(model.parseBoundedRead("100 3\nx").reportedBytes, 100)
+})
+
+test("the size limit is a real bound and formats readably", () => {
+  assert.equal(model.isOversized(model.MAX_NOTE_BYTES), false)
+  assert.equal(model.isOversized(model.MAX_NOTE_BYTES + 1), true)
+  assert.equal(model.formatBytes(0), "0 B")
+  assert.equal(model.formatBytes(512), "512 B")
+  assert.equal(model.formatBytes(1048576), "1.0 MiB")
+  assert.equal(model.formatBytes(536870912), "512.0 MiB")
+  assert.match(model.oversizedNotice(5, 536870912), /Dot 6 is 512\.0 MiB/)
+  assert.match(model.oversizedNotice(5, 536870912), /6\.md/)
+})

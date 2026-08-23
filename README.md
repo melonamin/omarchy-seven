@@ -130,6 +130,20 @@ There is one case where an outside edit is refused: if it lands while you are
 mid-sentence, your typing wins and gets written back. The point is never to
 lose a sentence you were in the middle of.
 
+### Size
+
+Seven reads at most **1 MiB** of a note. Past that it declines to load the file
+at all: the dot shows why, the editor goes read-only, and `append`, `clear`,
+and typing are all refused, so a file Seven never read is never written over.
+Delete or shrink it and the dot recovers the next time the panel opens.
+
+The reason is that `omarchy-shell` is one long-lived process that also draws
+the bar, the lock screen, and the notifications. These files are externally
+editable and may be synced from another machine, so their size is not Seven's
+to assume, and a note large enough to exhaust that process would take the
+desktop with it. Nothing unbounded is ever read — a 512 MiB note costs the same
+fixed read as a 512 byte one.
+
 No sync is built in, on purpose. The files are ordinary enough that Syncthing,
 `git`, or `rclone` will do a better job than this plugin could.
 
@@ -170,8 +184,8 @@ omarchy-shell seven status            # JSON: ready, dir, active note, shortcut,
 ```
 
 `status` reports shape, not content: which note is active, how many are filled,
-how long each one is, which face the panel is showing, and whether the shortcut
-registered. It never prints what
+how long each one is, which face the panel is showing, whether the shortcut
+registered, and any note that was too large to load. It never prints what
 you wrote, so it is safe to paste into a bug report.
 
 ## Notes are untrusted
@@ -196,6 +210,9 @@ merely by your hovering the bar — a note that beacons.
 - A link may only hand `http`, `https`, or `mailto` to `xdg-open`. `file:` and
   app-registered schemes can open or run things, and a note picks both the
   label and the target, so you cannot see where one goes before clicking.
+- No note is read in full. Reads are capped at the source rather than checked
+  and then performed, so there is no size to trust and no window in which a
+  file can be measured and then grow. See [Size](#size).
 
 `tests/e2e.sh` plants each of these against a local HTTP server and asserts it
 hears nothing.

@@ -191,7 +191,7 @@ pass "the bar tooltip escapes note content"
 # Qt fetches the target of a markdown image node when it renders one.
 sed -n '/DotPreview {/,/^          }/p' "$root_dir/Panel.qml" | grep -q 'SevenModel.previewSource' \
   || fail "the preview renders note markdown without defusing image syntax"
-sed -n '/DotPreview {/,/^          }/p' "$root_dir/Panel.qml" | grep -q 'root.previewing ?' \
+sed -n '/DotPreview {/,/^          }/p' "$root_dir/Panel.qml" | grep -qE 'source:.*root\.previewing' \
   || fail "the preview should hold no source while hidden; it parses and fetches either way"
 pass "preview markdown is defused and idle while hidden"
 
@@ -211,6 +211,36 @@ if grep -n 'Text {' "$root_dir"/*.qml >/dev/null; then
   [[ -z $missing ]] || fail "Text without an explicit textFormat (Qt will sniff it): $missing"
 fi
 pass "every Text sets its textFormat explicitly"
+
+# --- note size -------------------------------------------------------------
+
+# These files are externally editable and may be synced from another machine.
+# Reading one in full would let an oversized note exhaust the shell process,
+# which also owns the bar, the lock screen and the notifications.
+grep -q 'preload: false' "$root_dir/Service.qml" \
+  || fail "FileView must not preload; it would read the whole file before any limit applies"
+sed -n '/Process {/,/^      }/p' "$root_dir/Service.qml" | grep -q 'head -c' \
+  || fail "note reads must be bounded at the source with head -c"
+grep -q 'MAX_NOTE_BYTES' "$root_dir/SevenModel.js" || fail "no note size limit is defined"
+# Every read of anything inside the notes directory must be bounded. shell.json
+# is the shell's own config, read by the shell itself, and is not in scope.
+notes_reads=$(sed 's,//.*,,' "$root_dir/Service.qml" \
+  | grep -nE '\btext\(\)' | grep -v 'applyConfig' || true)
+[[ -z $notes_reads ]] \
+  || fail "unbounded FileView.text() read in the notes path: $notes_reads"
+grep -q 'head -c 16' "$root_dir/Service.qml" \
+  || fail "the state file beside the notes is read unbounded"
+pass "note reads are bounded before anything is materialised"
+
+# A refused note must not be written back; truncating somebody's file would be
+# worse than declining to open it.
+sed -n '/function setText/,/^  }/p' "$root_dir/Service.qml" | grep -q 'oversized\[slot\] !== undefined' \
+  || fail "setText does not refuse a dot whose file was never loaded"
+sed -n '/function flush/,/^  }/p' "$root_dir/Service.qml" | grep -q 'oversized\[slot\] !== undefined' \
+  || fail "flush does not skip a dot whose file was never loaded"
+grep -q 'readOnly: root.activeOversized' "$root_dir/Panel.qml" \
+  || fail "the editor is not read-only for a note that was refused"
+pass "a refused note is never edited or written back"
 
 # --- hygiene ------------------------------------------------------------------
 

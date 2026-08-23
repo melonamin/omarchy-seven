@@ -62,12 +62,17 @@ Item {
   // firing mid-keystroke can't yank text out from under the cursor.
   property var dirty: ({})
 
+  // Dots whose file exceeds MAX_NOTE_BYTES, mapped to their real size. These
+  // are never loaded, never edited, and never written back -- truncating
+  // somebody's oversized file would be a worse outcome than refusing it.
+  property var oversized: ({})
+
   // What this plugin last wrote per dot. An onLoaded carrying exactly this is
   // our own write echoing back; anything else is a genuine external edit.
   property var lastWritten: ({})
 
-  readonly property var filled: SevenModel.filledFlags(texts)
-  readonly property int filledCount: SevenModel.filledCount(texts)
+  readonly property var filled: SevenModel.filledFlags(texts, oversized)
+  readonly property int filledCount: SevenModel.filledCount(texts, oversized)
 
   // Bumped whenever a dot's text changes from outside the editor (disk edit,
   // IPC append, clear). Panels watch this to resync an unfocused editor.
@@ -87,6 +92,22 @@ Item {
     return String(texts[SevenModel.clampIndex(index)] || "")
   }
 
+  // Re-read one dot from disk. The panel calls this on open so a file that was
+  // refused, then deleted or shrunk, recovers without a shell restart -- and so
+  // a watch event missed while the panel was closed cannot leave it stale.
+  function reloadDot(index) {
+    var entry = dotFiles.objectAt(SevenModel.clampIndex(index))
+    if (entry) entry.reload()
+  }
+
+  function isOversized(index) {
+    return oversized[SevenModel.clampIndex(index)] !== undefined
+  }
+
+  function oversizedBytes(index) {
+    return Number(oversized[SevenModel.clampIndex(index)] || 0)
+  }
+
   function setActiveIndex(index) {
     var next = SevenModel.clampIndex(index)
     if (next === activeIndex) return
@@ -98,6 +119,9 @@ Item {
   // array, mark the dot dirty, and let the debounce timer do the I/O.
   function setText(index, text) {
     var slot = SevenModel.clampIndex(index)
+    // A dot we refused to load must not be written back: the editor is holding
+    // a notice, not the note, and saving that would destroy the file.
+    if (oversized[slot] !== undefined) return
     var value = SevenModel.normalize(text)
     if (String(texts[slot]) === value) return
 
@@ -127,17 +151,22 @@ Item {
     dotChangedExternally(slot)
   }
 
-  // Where unaddressed text goes: the first empty dot, matching Tot.
+  // Where unaddressed text goes: the first empty dot, matching Tot. A dot whose
+  // file was refused looks empty in `texts` but is not, so it is skipped.
   function captureIndex() {
-    return SevenModel.firstBlankIndex(texts)
+    for (var i = 0; i < SevenModel.DOT_COUNT; i++) {
+      if (oversized[i] === undefined && SevenModel.isBlank(texts[i])) return i
+    }
+    return SevenModel.DOT_COUNT - 1
   }
 
   function flush() {
     for (var key in dirty) {
       if (!dirty[key]) continue
       var slot = SevenModel.clampIndex(key)
-      var file = dotFiles.objectAt(slot)
-      if (!file) continue
+      if (oversized[slot] !== undefined) continue
+      var entry = dotFiles.objectAt(slot)
+      if (!entry) continue
       var value = String(texts[slot] || "")
       // Track the exact bytes handed to FileView, including the trailing
       // newline, so the reload this write triggers is recognised as our own.
@@ -146,13 +175,46 @@ Item {
       for (var k in lastWritten) written[k] = lastWritten[k]
       written[slot] = payload
       lastWritten = written
-      file.setText(payload)
+      entry.setText(payload)
     }
     dirty = ({})
   }
 
-  // A reload landed. Decide whether it is our own write coming back, or a real
-  // edit somebody made in another editor.
+  // A bounded read came back. Decide whether it is our own write echoing, a
+  // real edit somebody made elsewhere, or a file too big to take at all.
+  function acceptRead(index, output) {
+    var slot = SevenModel.clampIndex(index)
+    var parsed = SevenModel.parseBoundedRead(output)
+    if (!parsed.valid) return
+
+    var next = ({})
+    for (var key in oversized) next[key] = oversized[key]
+
+    if (SevenModel.isOversized(parsed.bytes)) {
+      // Nothing of the file is kept. parsed.text holds at most the limit, and
+      // is dropped here rather than shown as if it were the whole note.
+      if (next[slot] === parsed.reportedBytes) return
+      next[slot] = parsed.reportedBytes
+      oversized = next
+      console.warn("seven: dot " + (slot + 1) + " is "
+        + SevenModel.formatBytes(parsed.reportedBytes) + ", over the "
+        + SevenModel.formatBytes(SevenModel.MAX_NOTE_BYTES) + " limit; not loading it")
+      var cleared = texts.slice()
+      cleared[slot] = ""
+      texts = cleared
+      revision++
+      dotChangedExternally(slot)
+      return
+    }
+
+    if (next[slot] !== undefined) {
+      delete next[slot]
+      oversized = next
+    }
+
+    adoptFromDisk(slot, parsed.text)
+  }
+
   function adoptFromDisk(index, raw) {
     var slot = SevenModel.clampIndex(index)
     var value = SevenModel.normalize(raw)
@@ -183,10 +245,10 @@ Item {
     // files inside a directory that may not exist yet on a first run.
     Qt.callLater(function() {
       for (var i = 0; i < SevenModel.DOT_COUNT; i++) {
-        var file = dotFiles.objectAt(i)
-        if (file) file.reload()
+        var entry = dotFiles.objectAt(i)
+        if (entry) entry.reload()
       }
-      activeFile.reload()
+      activeReader.running = true
       root.ready = true
     })
   }
@@ -225,42 +287,109 @@ Item {
     onTriggered: activeFile.setText(String(root.activeIndex + 1) + "\n")
   }
 
-  // One FileView per dot. `watchChanges` is what makes an external `nvim 3.md`
-  // show up in the panel without a shell restart.
+  // One watcher-and-writer per dot, plus a bounded reader.
+  //
+  // Reading is deliberately not done through FileView.text(). That materialises
+  // the whole file in the shell process, and these files are externally
+  // editable and may be synced from another machine, so their size is not ours
+  // to assume -- a note large enough to exhaust the process would take the bar,
+  // the lock screen and the notifications down with it. `preload: false` stops
+  // FileView from ever reading on its own; `watchChanges` still reports edits.
+  //
+  // The reader asks for at most one byte more than the limit, so an enormous
+  // file costs an enormous read of exactly MAX_NOTE_BYTES + 1. `wc -c` on the
+  // same bounded stream says how much there was to take, which is what decides
+  // whether the content is used or dropped. There is no window in which a file
+  // can be checked and then grow: nothing unbounded is ever read.
   Instantiator {
     id: dotFiles
     model: SevenModel.DOT_COUNT
 
-    delegate: FileView {
+    delegate: Item {
+      id: slot
       required property int index
 
-      path: root.dotsDir + "/" + SevenModel.fileNameFor(index)
-      watchChanges: true
-      atomicWrites: true
-      printErrors: false
+      readonly property string filePath: root.dotsDir + "/" + SevenModel.fileNameFor(index)
 
-      onLoaded: root.adoptFromDisk(index, text())
-      onFileChanged: reload()
-      // Absent on first run, which is not an error: an empty dot is the
-      // correct starting state and the file appears on the first keystroke.
-      onLoadFailed: root.adoptFromDisk(index, "")
+      function reload() {
+        if (reader.running) {
+          reader.queued = true
+          return
+        }
+        reader.running = true
+      }
+
+      function setText(value) {
+        file.setText(value)
+      }
+
+      FileView {
+        id: file
+        path: slot.filePath
+        preload: false
+        watchChanges: true
+        atomicWrites: true
+        printErrors: false
+
+        onFileChanged: slot.reload()
+      }
+
+      Process {
+        id: reader
+        property bool queued: false
+
+        // printf writes the count first; head then writes at most the limit.
+        // A missing file yields "0" and no content, which is the correct
+        // starting state for an empty dot rather than an error.
+        command: ["bash", "-c",
+          // One bounded count decides everything: `wc -c` on a stream capped at
+          // the limit can never report more than limit + 1, however large the
+          // file is, so there is no size to trust and no window to race.
+          // `stat` reads nothing and only names the real size for the message.
+          // Content is sent only when it is going to be used.
+          'limit="$1"; f="$2";'
+          + ' n="$(head -c "$((limit + 1))" "$f" 2>/dev/null | wc -c)";'
+          + ' printf "%s %s\n" "$n" "$(stat -c %s "$f" 2>/dev/null || echo 0)";'
+          + ' [ "$n" -le "$limit" ] && head -c "$limit" "$f" 2>/dev/null; true',
+          "--", String(SevenModel.MAX_NOTE_BYTES), slot.filePath]
+
+        stdout: StdioCollector { id: readerOutput; waitForEnd: true }
+
+        onExited: function(code) {
+          if (code === 0) root.acceptRead(slot.index, String(readerOutput.text || ""))
+          if (queued) {
+            queued = false
+            slot.reload()
+          }
+        }
+      }
     }
   }
 
   // Which dot you were last on. Small enough to be its own file rather than
   // dragging a JSON state document into a plugin that otherwise has none.
+  //
+  // Written by Seven, but it sits in the same directory the notes do, which is
+  // externally editable and may be synced. It is read the same bounded way, so
+  // nothing in that directory can be made big enough to matter.
   FileView {
     id: activeFile
     path: root.statePath
+    preload: false
     watchChanges: false
     atomicWrites: true
     printErrors: false
+  }
 
-    onLoaded: {
-      var parsed = SevenModel.indexFromNumber(String(text()).trim())
+  Process {
+    id: activeReader
+    command: ["bash", "-c", 'head -c 16 "$1" 2>/dev/null', "--", root.statePath]
+    stdout: StdioCollector { id: activeOutput; waitForEnd: true }
+    onExited: function(code) {
+      if (code !== 0) return
+      var parsed = SevenModel.indexFromNumber(String(activeOutput.text || "").trim())
       if (parsed >= 0) root.activeIndex = parsed
     }
-    onLoadFailed: {}
   }
 
   // ------------------------------------------------------------- shortcut
@@ -408,12 +537,22 @@ Item {
     function read(dot: string): string {
       var index = SevenModel.indexFromNumber(dot)
       if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
+      // Not the same as empty, and must not read as empty to a script.
+      if (root.isOversized(index)) return oversizedError(index)
       return root.textAt(index)
+    }
+
+    function oversizedError(index: int): string {
+      return "error: dot " + (index + 1) + " is "
+        + SevenModel.formatBytes(root.oversizedBytes(index)) + ", over the "
+        + SevenModel.formatBytes(SevenModel.MAX_NOTE_BYTES)
+        + " limit; Seven will not read or modify it"
     }
 
     function append(dot: string, text: string): string {
       var index = SevenModel.indexFromNumber(dot)
       if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
+      if (root.isOversized(index)) return oversizedError(index)
       root.appendText(index, text)
       return "ok"
     }
@@ -422,6 +561,7 @@ Item {
     // so a script can tell.
     function capture(text: string): string {
       var index = root.captureIndex()
+      if (root.isOversized(index)) return oversizedError(index)
       root.appendText(index, text)
       return String(index + 1)
     }
@@ -429,6 +569,9 @@ Item {
     function clear(dot: string): string {
       var index = SevenModel.indexFromNumber(dot)
       if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
+      // Refused rather than obeyed: clearing would mean writing an empty file
+      // over one Seven never read.
+      if (root.isOversized(index)) return oversizedError(index)
       root.clearDot(index)
       return "ok"
     }
@@ -452,6 +595,8 @@ Item {
         shortcut: root.requestedShortcut,
         colorfulDot: root.settings.colorfulDot,
         panel: root.uiState,
+        limitBytes: SevenModel.MAX_NOTE_BYTES,
+        oversized: root.oversized,
         shortcutRegistered: root.shortcutRegistered,
         diagnostic: root.shortcutDiagnostic,
         counts: root.texts.map(function(value) { return String(value || "").length })

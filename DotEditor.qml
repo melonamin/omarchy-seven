@@ -11,6 +11,7 @@ ScrollView {
 
   property color foreground: Color.popups.text
   property bool monospace: true
+  property alias readOnly: area.readOnly
   property alias text: area.text
   property alias editorItem: area
 
