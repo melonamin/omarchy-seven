@@ -90,6 +90,12 @@ grep -q 'description = DESCRIPTION' "$root_dir/hypr/seven.lua" \
   || fail "the bind must carry a description or it will not appear in the SUPER+K menu"
 pass "the runtime shortcut is wired to hypr/seven.lua with a description"
 
+# Unloading the plugin has to take the bind with it, or removing the plugin
+# leaves the compositor holding a chord that runs a command nothing answers.
+sed -n '/Component.onDestruction/,/^  }/p' "$root_dir/Service.qml" | grep -q 'omarchy_seven.uninstall()' \
+  || fail "Component.onDestruction does not unregister the shortcut"
+pass "unloading the plugin unregisters its shortcut"
+
 # Tab indents. If it ever goes back to toggling the preview, indenting a
 # markdown list becomes impossible.
 grep -qE 'Qt\.Key_(Tab|Backtab)' "$root_dir/Panel.qml" \

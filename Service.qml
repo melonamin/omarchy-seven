@@ -193,7 +193,18 @@ Item {
 
   // Writing on the way out matters more here than anywhere else: the debounce
   // window is exactly where an unlucky shell restart would eat a sentence.
-  Component.onDestruction: flush()
+  //
+  // The shortcut goes with it. Disabling or removing the plugin unloads this
+  // service but leaves the compositor holding a bind that now runs a command
+  // nothing answers -- a dead chord squatting on SUPER+CTRL+J until the next
+  // Hyprland reload. The plugin folder still exists at this point, so the Lua
+  // is still there to load.
+  Component.onDestruction: {
+    flush()
+    if (!luaPath) return
+    Quickshell.execDetached(["hyprctl", "-i", "0", "eval",
+      "dofile(" + luaQuote(luaPath) + "); omarchy_seven.uninstall()"])
+  }
 
   Process {
     id: ensureDirProc

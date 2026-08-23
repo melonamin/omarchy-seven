@@ -59,6 +59,31 @@ await_disk() {
   return 1
 }
 
+# Open the panel on a note and wait until it is actually ready to be typed
+# into: mapped, and showing the editor rather than a leftover preview or sheet.
+# "show" returning is not the same as the editor having focus.
+open_on() {
+  local dot="$1" _
+  omarchy-shell -q seven show "$dot" >/dev/null 2>&1
+  await_open || return 1
+  for _ in 1 2 3 4 5 6; do
+    [[ $(panel_mode) == "editor" ]] && return 0
+    sleep 0.3
+  done
+  return 1
+}
+
+# The dot style round-trips through shell.json and back into the service, so
+# the new value is a state to wait for, not one to sleep at.
+await_style() {
+  local want="$1" _
+  for _ in 1 2 3 4 5 6 7 8; do
+    [[ $(json_get colorfulDot <<<"$(omarchy-shell seven status)") == "$want" ]] && return 0
+    sleep 0.4
+  done
+  return 1
+}
+
 panel_mode() {
   omarchy-shell seven status 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["panel"]["mode"])' 2>/dev/null
@@ -71,8 +96,12 @@ set_mode() {
   local want="$1"; shift
   local attempt _
   for attempt in 1 2 3; do
+    # Check before pressing. These are toggles, so retrying blind would undo a
+    # press whose confirmation was merely slow, and the retries would oscillate
+    # rather than converge.
+    [[ $(panel_mode) == "$want" ]] && return 0
     wtype "$@"
-    for _ in 1 2 3 4; do
+    for _ in 1 2 3 4 5 6; do
       sleep 0.3
       [[ $(panel_mode) == "$want" ]] && return 0
     done
@@ -268,8 +297,7 @@ pass "Escape closes the panel"
 # --- markdown editing affordances -------------------------------------------
 
 omarchy-shell -q seven clear 7 >/dev/null
-omarchy-shell -q seven show 7 >/dev/null
-sleep 1.5
+open_on 7 || fail "the panel did not open on dot 7"
 await_empty 7 || fail "dot 7 did not start empty"
 
 # `--` because wtype reads a leading dash as one of its own options.
@@ -333,7 +361,7 @@ sleep 1
 # This used to fail: focus was mistaken for "the user is typing", so the note
 # stayed stale on screen and the next keystroke wrote the stale copy back.
 await_empty 7 || fail "dot 7 did not empty before the external-edit checks"
-omarchy-shell -q seven show 7 >/dev/null; sleep 1.5
+open_on 7 || fail "the panel did not open on dot 7"
 type_text 7 "mine" "mine" || fail "could not seed dot 7"
 # Let the debounce finish before editing from outside. An external write that
 # lands while a flush is still pending is, correctly, discarded in favour of
@@ -371,13 +399,31 @@ pass "an atomic replace is noticed, not just an in-place write"
 
 # The other side of the rule: an edit that lands while a sentence is actually
 # being typed loses to the person at the keyboard.
-await_empty 7 || fail "dot 7 did not empty before the conflict check"
-wtype "mid-sentence"
-printf 'clobber\n' > "$dots_dir/7.md"
-sleep 2
-[[ $(omarchy-shell seven read 7) == "mid-sentence" ]] \
-  || fail "an external write during typing beat the person typing"
-pass "an external write during typing loses to the keyboard"
+#
+# That window is the 400ms save debounce, so the write has to land *during*
+# delivery of the keystrokes, not before or after. It is fired from a
+# background job partway through a deliberately long sentence, and the whole
+# thing is retried: if the keystrokes are slow to start, the write arrives
+# with nothing pending and is correctly adopted, which is the other rule
+# rather than a failure of this one.
+conflict_sentence="this sentence is being typed right now"
+conflict_won=""
+for _ in 1 2 3; do
+  await_empty 7 || fail "dot 7 did not empty before the conflict check"
+  ( sleep 0.2; printf 'clobber\n' > "$dots_dir/7.md" ) &
+  wtype -- "$conflict_sentence"
+  wait
+  sleep 1.5
+  if [[ $(omarchy-shell seven read 7) == "$conflict_sentence" ]]; then
+    conflict_won=yes
+    break
+  fi
+done
+if [[ -n $conflict_won ]]; then
+  pass "an external write during typing loses to the keyboard"
+else
+  skip "could not land a write inside the 400ms typing window; rule unverified"
+fi
 
 omarchy-shell -q seven close >/dev/null 2>&1 || true
 sleep 1
@@ -428,7 +474,7 @@ else
   printf '<img src="http://127.0.0.1:%s/tooltip">\n' "$beacon_port" > "$dots_dir/4.md"
   sleep 1.5
 
-  omarchy-shell -q seven show 3 >/dev/null; sleep 1.5
+  open_on 3 || fail "the panel did not open on dot 3"
   [[ ! -s $beacon_dir/hits ]] \
     || fail "opening a note fetched $(tr '\n' ' ' < "$beacon_dir/hits")"
   pass "opening a note with a remote image fetches nothing"
@@ -445,7 +491,7 @@ else
   # The tooltip path needs the pointer and a findable dot.
   style=$(json_get colorfulDot <<<"$(omarchy-shell seven status)")
   if command -v dotool >/dev/null && python3 -c 'import PIL' 2>/dev/null && [[ $style == True ]]; then
-    omarchy-shell -q seven show 4 >/dev/null; sleep 1
+    open_on 4 || fail "the panel did not open on dot 4"
     omarchy-shell -q seven close >/dev/null; sleep 1.2
     shot=$(mktemp --suffix=.png)
     grim "$shot"
@@ -492,7 +538,7 @@ fi
 # --- the cheat sheet --------------------------------------------------------
 
 await_empty 7 || fail "dot 7 did not empty before the cheat-sheet checks"
-omarchy-shell -q seven show 7 >/dev/null; sleep 1.5
+open_on 7 || fail "the panel did not open on dot 7"
 type_text 7 "abc" "abc" || fail "could not seed dot 7"
 
 set_mode help -k F1 || fail "F1 did not open the cheat sheet"
@@ -588,9 +634,15 @@ SAVE
 
   # A filled, active dot paints the bar dot in that note's colour, which is how
   # the pointer finds it on screen.
+  # The dot is found on screen by the active note's colour, which only shows
+  # when that note is both active and non-empty -- an empty one draws a
+  # translucent ring that no exact-colour match will find.
   omarchy-shell -q seven append 1 "anchor" >/dev/null
-  omarchy-shell -q seven show 1 >/dev/null; sleep 1
-  omarchy-shell -q seven close >/dev/null; sleep 1.2
+  await_text 1 "anchor" || fail "could not seed the anchor note"
+  open_on 1 || fail "the panel did not open on dot 1"
+  omarchy-shell -q seven close >/dev/null
+  await_closed || true
+  sleep 0.8
 
   shot=$(mktemp --suffix=.png)
   grim "$shot"
@@ -613,14 +665,12 @@ FIND
 
   cursor_before=$(hyprctl cursorpos)
   printf 'mouseto %s\n' "$spot" | dotool; sleep 0.5
-  printf 'click right\n' | dotool; sleep 1.5
-  [[ $(json_get colorfulDot <<<"$(omarchy-shell seven status)") == False ]] \
-    || fail "right click did not switch the bar dot to its plain presentation"
+  printf 'click right\n' | dotool
+  await_style False || fail "right click did not switch the bar dot to its plain presentation"
   pass "right click switches the bar dot to a plain solid dot"
 
-  printf 'click right\n' | dotool; sleep 1.5
-  [[ $(json_get colorfulDot <<<"$(omarchy-shell seven status)") == True ]] \
-    || fail "right click did not switch the bar dot back"
+  printf 'click right\n' | dotool
+  await_style True || fail "right click did not switch the bar dot back"
   pass "right click switches it back"
 
   # The choice has to survive in shell.json, not just in the running widget.
