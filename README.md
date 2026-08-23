@@ -9,8 +9,8 @@ Inspired by [Tot](https://tot.rocks) by The Iconfactory, which had the good
 idea first. This is an independent implementation for Omarchy and is not
 affiliated with or endorsed by The Iconfactory.
 
-<video src="https://github.com/user-attachments/assets/02941be2-7858-476c-bc7c-a23fb5110435" controls muted width="880">
-  <a href="https://github.com/user-attachments/assets/02941be2-7858-476c-bc7c-a23fb5110435">Watch the demo</a>
+<video src="https://github.com/user-attachments/assets/30617410-5bac-4fb3-b886-56fe9d676291" controls muted width="880">
+  <a href="https://github.com/user-attachments/assets/30617410-5bac-4fb3-b886-56fe9d676291">Watch the demo</a>
 </video>
 
 _Fifty seconds: the seven notes narrate their own tour, and the last one has you
