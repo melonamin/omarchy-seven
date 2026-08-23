@@ -9,7 +9,12 @@ Inspired by [Tot](https://tot.rocks) by The Iconfactory, which had the good
 idea first. This is an independent implementation for Omarchy and is not
 affiliated with or endorsed by The Iconfactory.
 
-![Seven open on a note, with the seven dots above it](preview.png)
+<video src="https://github.com/user-attachments/assets/02941be2-7858-476c-bc7c-a23fb5110435" controls muted width="880">
+  <a href="https://github.com/user-attachments/assets/02941be2-7858-476c-bc7c-a23fb5110435">Watch the demo</a>
+</video>
+
+_Fifty seconds: the seven notes narrate their own tour, and the last one has you
+run a command in a terminal and watch the text arrive._
 
 ## Features
 
