@@ -189,6 +189,9 @@ beacon_pid=""
 restore() {
   [[ -n $beacon_pid ]] && kill "$beacon_pid" 2>/dev/null
   omarchy-shell seven close >/dev/null 2>&1 || true
+  # Closing flushes the editor; allow its asynchronous writes to finish before
+  # restoring the originals, then verify them before removing the backup.
+  sleep 1
   local n
   for n in 1 2 3 4 5 6 7; do
     if [[ -f "$backup/$n.md" ]]; then cp "$backup/$n.md" "$dots_dir/$n.md"; else rm -f "$dots_dir/$n.md"; fi
@@ -211,6 +214,15 @@ RESTORE
     rm -f "$entry_backup"
   fi
   sleep 1
+  for n in 1 2 3 4 5 6 7; do
+    if [[ -f "$backup/$n.md" ]]; then
+      cmp -s "$backup/$n.md" "$dots_dir/$n.md" \
+        || fail "note $n was not restored; backup retained at $backup"
+    else
+      [[ ! -s "$dots_dir/$n.md" ]] \
+        || fail "note $n was not restored; backup retained at $backup"
+    fi
+  done
   rm -rf "$backup"
 }
 trap restore EXIT

@@ -21,8 +21,9 @@ Item {
   property var manifest: null
 
   readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : SevenModel.PLUGIN_ID
-  readonly property string sourceDir: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
-  readonly property string luaPath: sourceDir ? sourceDir + "/hypr/seven.lua" : ""
+  // Resolve bundled files from this component; the public plugin manifest
+  // does not expose the registry's private source directory.
+  readonly property string luaPath: decodeURIComponent(String(Qt.resolvedUrl("hypr/seven.lua")).replace(/^file:\/\//, ""))
   readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
   readonly property string home: Quickshell.env("HOME")
   readonly property string dotsDir: SevenModel.dotsDir(home, Quickshell.env("XDG_DATA_HOME"))
@@ -241,6 +242,7 @@ Item {
 
   Component.onCompleted: {
     ensureDirProc.running = true
+    installBinds(false)
     // Give mkdir a turn of the event loop before the FileViews reach for
     // files inside a directory that may not exist yet on a first run.
     Qt.callLater(function() {
@@ -322,15 +324,20 @@ Item {
       function setText(value) {
         // Emptying a note does not go through FileView.
         //
-        // FileView skips a write whose text equals its own cached copy, and
-        // since reads moved off it that cache is always empty -- so writing ""
-        // through it is silently a no-op and clearing a note never reaches
-        // disk. Truncating directly has no such opinion. There is no partial
-        // state to protect here either: the file ends up old or empty.
+        // FileView skips a write whose text equals its own cached copy, which
+        // starts empty because reads happen separately. Writing "" through it
+        // can therefore silently do nothing. Truncating directly has no such
+        // opinion. There is no partial state to protect here either: the file
+        // ends up old or empty.
         if (value === "") {
           truncater.running = true
           return
         }
+        // External edits and truncation leave FileView's cached text stale.
+        // Unload that cache before writing, so restoring a previous value is
+        // not skipped. preload:false keeps this from reading the file.
+        file.path = ""
+        file.path = slot.filePath
         file.setText(value)
       }
 
@@ -447,8 +454,6 @@ Item {
         + luaQuote(requestedShortcut) + ", " + (afterReload ? "true" : "false") + ")"]
     binder.running = true
   }
-
-  onLuaPathChanged: if (luaPath) installBinds(false)
 
   FileView {
     path: root.configPath

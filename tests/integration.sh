@@ -39,6 +39,9 @@ pass "storage directory exists at $dots_dir"
 backup=$(mktemp -d)
 restore() {
   local n
+  # Let the final debounced write finish before replacing its file with the
+  # backup; otherwise that write can overwrite the restored note.
+  sleep 1
   for n in 1 2 3 4 5 6 7; do
     if [[ -f "$backup/$n.md" ]]; then
       cp "$backup/$n.md" "$dots_dir/$n.md"
@@ -49,6 +52,15 @@ restore() {
   # Let the watcher adopt the restored files before the shell writes anything
   # of its own back over them.
   sleep 1
+  for n in 1 2 3 4 5 6 7; do
+    if [[ -f "$backup/$n.md" ]]; then
+      cmp -s "$backup/$n.md" "$dots_dir/$n.md" \
+        || fail "note $n was not restored; backup retained at $backup"
+    else
+      [[ ! -s "$dots_dir/$n.md" ]] \
+        || fail "note $n was not restored; backup retained at $backup"
+    fi
+  done
   rm -rf "$backup"
 }
 trap restore EXIT
@@ -154,6 +166,31 @@ target=$(omarchy-shell seven capture "capture probe")
   || fail "capture went to dot $target after clearing dot 1; the cleared dot did not read as empty"
 pass "a cleared dot is the one capture picks"
 
+# The writer must not skip text it wrote before a clear or an external edit.
+for replacement in clear external; do
+  omarchy-shell seven clear 3 >/dev/null
+  sleep 0.6
+  [[ $(omarchy-shell seven append 3 "repeat write probe") == ok ]] || fail "append failed"
+  sleep 1
+  [[ $(cat "$dots_dir/3.md") == "repeat write probe" ]] || fail "initial write did not reach disk"
+  if [[ $replacement == clear ]]; then
+    omarchy-shell seven clear 3 >/dev/null
+  else
+    : > "$dots_dir/3.md"
+  fi
+  sleep 1
+  [[ ! -s "$dots_dir/3.md" ]] || fail "$replacement did not empty the file"
+  [[ -z $(omarchy-shell seven read 3) ]] || fail "$replacement was not adopted"
+  [[ $(omarchy-shell seven append 3 "repeat write probe") == ok ]] || fail "repeat append failed"
+  for _ in 1 2 3 4 5 6 7 8; do
+    [[ $(cat "$dots_dir/3.md") == "repeat write probe" ]] && break
+    sleep 0.4
+  done
+  [[ $(cat "$dots_dir/3.md") == "repeat write probe" ]] \
+    || fail "rewriting the same text after $replacement was skipped"
+done
+pass "repeated text reaches disk after clearing or externally emptying a note"
+
 # --- shortcut -----------------------------------------------------------------
 
 status=$(omarchy-shell seven status)
@@ -166,6 +203,14 @@ if [[ -n $shortcut ]]; then
   [[ $shortcut == "$(tr '[:lower:]' '[:upper:]' <<<"$shortcut")" ]] \
     || fail "the reported shortcut is not normalised: $shortcut"
   pass "the shortcut is normalised to Hyprland's shape ($shortcut)"
+  for _ in 1 2 3 4 5; do
+    [[ $(json_get shortcutRegistered <<<"$status") == True ]] && break
+    sleep 0.4
+    status=$(omarchy-shell seven status)
+  done
+  [[ $(json_get shortcutRegistered <<<"$status") == True ]] \
+    || fail "shortcut $shortcut is not registered: $(json_get diagnostic <<<"$status")"
+  pass "the configured shortcut is registered with Hyprland"
 fi
 
 printf '\n\033[1;32mintegration passed\033[0m\n'
