@@ -218,6 +218,12 @@ merely by your hovering the bar — a note that beacons.
 - No note is read in full. Reads are capped at the source rather than checked
   and then performed, so there is no size to trust and no window in which a
   file can be measured and then grow. See [Size](#size).
+- Note and active-state I/O refuses symlinks, FIFOs, devices, and directories.
+  The helper pins the containing directory, opens reads without following the
+  final link, and saves through a temporary file and atomic rename. Reads and
+  writes have deadlines. A refused note is read-only and reports an error;
+  replacing it with a regular file and reopening the dot retries access. Failed
+  saves keep the pending text in memory. Perl and coreutils are supplied by Omarchy.
 
 `tests/e2e.sh` plants each of these against a local HTTP server and asserts it
 hears nothing.
@@ -261,9 +267,13 @@ panel closing, which is the entire point of a scratchpad.
 ```bash
 tests/static.sh                   # manifest, QML syntax, wiring invariants
 node --test tests/model.test.js   # unit: editing, counts, settings, the sheet
+node --test tests/filesystem.test.js # isolated: safe I/O, races, deadlines, service IPC
 tests/integration.sh              # live: IPC round trips, disk, external edits
 tests/e2e.sh                      # live: drives the real panel with wtype
 ```
+
+The filesystem tests need Perl, coreutils, and Quickshell, and use temporary
+notes without touching personal notes or compositor bindings.
 
 The last two need Seven installed and enabled in an Omarchy session. Both
 snapshot all seven notes and restore them byte-for-byte on exit. `tests/e2e.sh`

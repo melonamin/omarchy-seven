@@ -35,6 +35,7 @@ Panel {
   // the note, and refuses edits, because saving would overwrite a file Seven
   // deliberately never read.
   readonly property bool activeOversized: service ? service.isOversized(activeIndex) : false
+  readonly property bool activeRefused: service ? service.isRefused(activeIndex) : false
   readonly property color activeHue: SevenModel.colorFor(activeIndex)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -78,8 +79,8 @@ Panel {
       return
     }
     var index = root.service.activeIndex
-    editor.text = root.service.isOversized(index)
-      ? SevenModel.oversizedNotice(index, root.service.oversizedBytes(index))
+    editor.text = root.service.isRefused(index)
+      ? root.service.noteError(index)
       : root.service.textAt(index)
   }
 
@@ -342,12 +343,12 @@ Panel {
             // whether typing worked after leaving the preview.
             foreground: Color.popups.text
             monospace: root.config.monospace
-            readOnly: root.activeOversized
+            readOnly: root.activeRefused
 
             // Same reason as loadActiveIntoEditor: the service's own index is
             // the authority on which dot this text belongs to.
             onEdited: function(text) {
-              if (root.service && !root.activeOversized) root.service.setText(root.service.activeIndex, text)
+              if (root.service && !root.activeRefused) root.service.setText(root.service.activeIndex, text)
             }
             onCloseRequested: root.dismiss()
             onHelpRequested: root.toggleHelp()
@@ -365,7 +366,7 @@ Panel {
             // what that markdown references even when nothing is drawn, so a
             // note left unread would otherwise reach out the moment the panel
             // opened on any note at all.
-            source: root.previewing && !root.activeOversized
+            source: root.previewing && !root.activeRefused
               ? SevenModel.previewSource(root.activeText)
               : ""
 
@@ -405,7 +406,7 @@ Panel {
             visible: root.config.showCounts
             text: root.activeOversized
               ? SevenModel.formatBytes(root.service ? root.service.oversizedBytes(root.activeIndex) : 0) + " · not loaded"
-              : SevenModel.countsLabel(root.activeText)
+              : root.activeRefused ? "File unavailable" : SevenModel.countsLabel(root.activeText)
             textFormat: Text.PlainText
             color: Util.alpha(Color.popups.text, 0.55)
             font.family: root.fontFamily

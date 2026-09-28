@@ -219,8 +219,9 @@ pass "every Text sets its textFormat explicitly"
 # which also owns the bar, the lock screen and the notifications.
 grep -q 'preload: false' "$root_dir/Service.qml" \
   || fail "FileView must not preload; it would read the whole file before any limit applies"
-sed -n '/Process {/,/^      }/p' "$root_dir/Service.qml" | grep -q 'head -c' \
-  || fail "note reads must be bounded at the source with head -c"
+grep -q 'note-io.pl' "$root_dir/Service.qml" \
+  || fail "note reads must use the safe I/O helper"
+perl -c "$root_dir/note-io.pl" >/dev/null 2>&1 || fail "note-io.pl is not valid Perl"
 grep -q 'MAX_NOTE_BYTES' "$root_dir/SevenModel.js" || fail "no note size limit is defined"
 # Every read of anything inside the notes directory must be bounded. shell.json
 # is the shell's own config, read by the shell itself, and is not in scope.
@@ -228,26 +229,29 @@ notes_reads=$(sed 's,//.*,,' "$root_dir/Service.qml" \
   | grep -nE '\btext\(\)' | grep -v 'applyConfig' || true)
 [[ -z $notes_reads ]] \
   || fail "unbounded FileView.text() read in the notes path: $notes_reads"
-grep -q 'head -c 16' "$root_dir/Service.qml" \
+grep -q '"read", root.statePath, "16"' "$root_dir/Service.qml" \
   || fail "the state file beside the notes is read unbounded"
 pass "note reads are bounded before anything is materialised"
 
 # A refused note must not be written back; truncating somebody's file would be
 # worse than declining to open it.
-sed -n '/function setText/,/^  }/p' "$root_dir/Service.qml" | grep -q 'oversized\[slot\] !== undefined' \
+sed -n '/function setText/,/^  }/p' "$root_dir/Service.qml" | grep -q 'isRefused(slot)' \
   || fail "setText does not refuse a dot whose file was never loaded"
-sed -n '/function flush/,/^  }/p' "$root_dir/Service.qml" | grep -q 'oversized\[slot\] !== undefined' \
+sed -n '/function flush/,/^  }/p' "$root_dir/Service.qml" | grep -q 'isRefused(slot)' \
   || fail "flush does not skip a dot whose file was never loaded"
-grep -q 'readOnly: root.activeOversized' "$root_dir/Panel.qml" \
+grep -q 'readOnly: root.activeRefused' "$root_dir/Panel.qml" \
   || fail "the editor is not read-only for a note that was refused"
 pass "a refused note is never edited or written back"
 
-# FileView skips a write matching its cached copy, and that cache stays empty
-# now that reads do not go through it -- so an empty write through FileView
-# silently does nothing and clearing a note never reaches disk.
-sed -n '/function setText(value)/,/^      }/p' "$root_dir/Service.qml" | grep -q 'value === ""' \
-  || fail "emptying a note still goes through FileView.setText, which skips it"
-pass "emptying a note bypasses FileView's write-skipping"
+# FileView is only a watcher. A single helper handles empty and nonempty saves.
+if grep -qE 'file\.setText|truncater|head -c' "$root_dir/Service.qml"; then
+  fail "note I/O still bypasses the safe helper"
+fi
+grep -q '"timeout", "--kill-after=1s", "3s"' "$root_dir/Service.qml" \
+  || fail "note readers have no process deadline"
+grep -q '"timeout", "--kill-after=1s", "3s"' "$root_dir/NoteWriter.qml" \
+  || fail "note writers have no process deadline"
+pass "note I/O uses the safe helper and has process deadlines"
 
 # --- hygiene ------------------------------------------------------------------
 
@@ -258,7 +262,7 @@ pass "no symlinks inside the plugin folder"
 while IFS= read -r file; do
   [[ -s $file ]] || continue
   [[ $(tail -c1 "$file" | wc -l) -eq 1 ]] || fail "${file#"$root_dir/"} does not end with a newline"
-done < <(find "$root_dir" -type f \( -name '*.qml' -o -name '*.js' -o -name '*.json' -o -name '*.md' -o -name '*.sh' \) -not -path '*/.git/*')
+done < <(find "$root_dir" -type f \( -name '*.qml' -o -name '*.js' -o -name '*.json' -o -name '*.md' -o -name '*.sh' -o -name '*.pl' \) -not -path '*/.git/*')
 pass "text files end with a newline"
 
 while IFS= read -r script; do

@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
 import "SevenModel.js" as SevenModel
+import "NoteIo.js" as NoteIo
 
 // Owner of the seven notes.
 //
@@ -24,6 +25,7 @@ Item {
   // Resolve bundled files from this component; the public plugin manifest
   // does not expose the registry's private source directory.
   readonly property string luaPath: decodeURIComponent(String(Qt.resolvedUrl("hypr/seven.lua")).replace(/^file:\/\//, ""))
+  readonly property string helperPath: decodeURIComponent(String(Qt.resolvedUrl("note-io.pl")).replace(/^file:\/\//, ""))
   readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
   readonly property string home: Quickshell.env("HOME")
   readonly property string dotsDir: SevenModel.dotsDir(home, Quickshell.env("XDG_DATA_HOME"))
@@ -57,6 +59,7 @@ Item {
   property var texts: ["", "", "", "", "", "", ""]
   property int activeIndex: 0
   property bool ready: false
+  property int loading: SevenModel.DOT_COUNT + 1
 
   // Dots whose in-memory text has diverged from disk and is waiting for the
   // debounce timer. A dot listed here ignores reload events, so a file watcher
@@ -67,13 +70,15 @@ Item {
   // are never loaded, never edited, and never written back -- truncating
   // somebody's oversized file would be a worse outcome than refusing it.
   property var oversized: ({})
+  property var ioErrors: ({})
+  readonly property var refused: Object.assign({}, oversized, ioErrors)
 
   // What this plugin last wrote per dot. An onLoaded carrying exactly this is
   // our own write echoing back; anything else is a genuine external edit.
   property var lastWritten: ({})
 
-  readonly property var filled: SevenModel.filledFlags(texts, oversized)
-  readonly property int filledCount: SevenModel.filledCount(texts, oversized)
+  readonly property var filled: SevenModel.filledFlags(texts, refused)
+  readonly property int filledCount: SevenModel.filledCount(texts, refused)
 
   // Bumped whenever a dot's text changes from outside the editor (disk edit,
   // IPC append, clear). Panels watch this to resync an unfocused editor.
@@ -109,6 +114,42 @@ Item {
     return Number(oversized[SevenModel.clampIndex(index)] || 0)
   }
 
+  function isRefused(index) {
+    return refused[SevenModel.clampIndex(index)] !== undefined
+  }
+
+  function noteError(index) {
+    var slot = SevenModel.clampIndex(index)
+    if (isOversized(slot)) return SevenModel.oversizedNotice(slot, oversizedBytes(slot))
+    return "Dot " + (slot + 1) + " could not be accessed: " + String(ioErrors[slot] || "I/O failed")
+      + "\n\nSeven only reads and replaces regular files. Fix the file or directory, then reopen this dot to retry."
+  }
+
+  function refuseIo(index, message) {
+    var next = Object.assign({}, ioErrors)
+    next[index] = message || "I/O failed or exceeded its deadline"
+    ioErrors = next
+    revision++
+    dotChangedExternally(index)
+  }
+
+  function payloadFor(value) {
+    return value === "" || value.charAt(value.length - 1) === "\n" ? value : value + "\n"
+  }
+
+  function acceptWrite(index, payload, code, error) {
+    if (code !== 0) {
+      refuseIo(index, error)
+      return
+    }
+    if (payloadFor(textAt(index)) === payload) {
+      var pending = Object.assign({}, dirty)
+      delete pending[index]
+      dirty = pending
+    }
+    reloadDot(index)
+  }
+
   function setActiveIndex(index) {
     var next = SevenModel.clampIndex(index)
     if (next === activeIndex) return
@@ -122,7 +163,7 @@ Item {
     var slot = SevenModel.clampIndex(index)
     // A dot we refused to load must not be written back: the editor is holding
     // a notice, not the note, and saving that would destroy the file.
-    if (oversized[slot] !== undefined) return
+    if (isRefused(slot)) return
     var value = SevenModel.normalize(text)
     if (String(texts[slot]) === value) return
 
@@ -156,7 +197,7 @@ Item {
   // file was refused looks empty in `texts` but is not, so it is skipped.
   function captureIndex() {
     for (var i = 0; i < SevenModel.DOT_COUNT; i++) {
-      if (oversized[i] === undefined && SevenModel.isBlank(texts[i])) return i
+      if (!isRefused(i) && SevenModel.isBlank(texts[i])) return i
     }
     return SevenModel.DOT_COUNT - 1
   }
@@ -165,20 +206,19 @@ Item {
     for (var key in dirty) {
       if (!dirty[key]) continue
       var slot = SevenModel.clampIndex(key)
-      if (oversized[slot] !== undefined) continue
+      if (isRefused(slot)) continue
       var entry = dotFiles.objectAt(slot)
       if (!entry) continue
       var value = String(texts[slot] || "")
-      // Track the exact bytes handed to FileView, including the trailing
+      // Track the exact bytes handed to the writer, including the trailing
       // newline, so the reload this write triggers is recognised as our own.
-      var payload = value === "" ? "" : (value.charAt(value.length - 1) === "\n" ? value : value + "\n")
+      var payload = payloadFor(value)
       var written = ({})
       for (var k in lastWritten) written[k] = lastWritten[k]
       written[slot] = payload
       lastWritten = written
       entry.setText(payload)
     }
-    dirty = ({})
   }
 
   // A bounded read came back. Decide whether it is our own write echoing, a
@@ -186,7 +226,18 @@ Item {
   function acceptRead(index, output) {
     var slot = SevenModel.clampIndex(index)
     var parsed = SevenModel.parseBoundedRead(output)
-    if (!parsed.valid) return
+    if (!parsed.valid) {
+      refuseIo(slot, "Invalid response from the note reader")
+      return
+    }
+    if (ioErrors[slot] !== undefined) {
+      var errors = Object.assign({}, ioErrors)
+      delete errors[slot]
+      ioErrors = errors
+      revision++
+      dotChangedExternally(slot)
+      if (dirty[slot]) saveTimer.restart()
+    }
 
     var next = ({})
     for (var key in oversized) next[key] = oversized[key]
@@ -243,16 +294,6 @@ Item {
   Component.onCompleted: {
     ensureDirProc.running = true
     installBinds(false)
-    // Give mkdir a turn of the event loop before the FileViews reach for
-    // files inside a directory that may not exist yet on a first run.
-    Qt.callLater(function() {
-      for (var i = 0; i < SevenModel.DOT_COUNT; i++) {
-        var entry = dotFiles.objectAt(i)
-        if (entry) entry.reload()
-      }
-      activeReader.running = true
-      root.ready = true
-    })
   }
 
   // Writing on the way out matters more here than anywhere else: the debounce
@@ -265,6 +306,8 @@ Item {
   // is still there to load.
   Component.onDestruction: {
     flush()
+    if (activeSaveTimer.running) activeWriter.setText(String(activeIndex + 1) + "\n")
+    activeWriter.release()
     if (!luaPath) return
     Quickshell.execDetached(["hyprctl", "-i", "0", "eval",
       "dofile(" + luaQuote(luaPath) + "); omarchy_seven.uninstall()"])
@@ -273,6 +316,13 @@ Item {
   Process {
     id: ensureDirProc
     command: ["mkdir", "-p", root.dotsDir]
+    onExited: {
+      for (var i = 0; i < SevenModel.DOT_COUNT; i++) {
+        var entry = dotFiles.objectAt(i)
+        if (entry) entry.reload()
+      }
+      activeReader.running = true
+    }
   }
 
   Timer {
@@ -286,23 +336,21 @@ Item {
     id: activeSaveTimer
     interval: 400
     repeat: false
-    onTriggered: activeFile.setText(String(root.activeIndex + 1) + "\n")
+    onTriggered: root.activeWriter.setText(String(root.activeIndex + 1) + "\n")
   }
 
-  // One watcher-and-writer per dot, plus a bounded reader.
-  //
-  // Reading is deliberately not done through FileView.text(). That materialises
-  // the whole file in the shell process, and these files are externally
-  // editable and may be synced from another machine, so their size is not ours
-  // to assume -- a note large enough to exhaust the process would take the bar,
-  // the lock screen and the notifications down with it. `preload: false` stops
-  // FileView from ever reading on its own; `watchChanges` still reports edits.
-  //
-  // The reader asks for at most one byte more than the limit, so an enormous
-  // file costs an enormous read of exactly MAX_NOTE_BYTES + 1. `wc -c` on the
-  // same bounded stream says how much there was to take, which is what decides
-  // whether the content is used or dropped. There is no window in which a file
-  // can be checked and then grow: nothing unbounded is ever read.
+  // FileView only watches. All note/state I/O goes through the bounded helper,
+  // which refuses links and special files and pins the containing directory.
+  // Writers outlive plugin unloading so the final debounced edit can finish.
+  property var activeWriter: NoteIo.createWriter(Qt.resolvedUrl("NoteWriter.qml"), root.helperPath, root.statePath)
+
+  Connections {
+    target: root.activeWriter
+    function onCompleted(code, error) {
+      if (code !== 0) console.warn("seven: could not save active dot:", error)
+    }
+  }
+
   Instantiator {
     id: dotFiles
     model: SevenModel.DOT_COUNT
@@ -310,76 +358,53 @@ Item {
     delegate: Item {
       id: slot
       required property int index
-
+      property bool initiallyLoaded: false
       readonly property string filePath: root.dotsDir + "/" + SevenModel.fileNameFor(index)
+      property var writer: NoteIo.createWriter(Qt.resolvedUrl("NoteWriter.qml"), root.helperPath, slot.filePath)
+
+      Component.onDestruction: writer.release()
 
       function reload() {
-        if (reader.running) {
-          reader.queued = true
-          return
-        }
-        reader.running = true
+        if (writer.running) return // Its completion will reload the final file.
+        if (reader.running) reader.queued = true
+        else reader.running = true
       }
 
-      function setText(value) {
-        // Emptying a note does not go through FileView.
-        //
-        // FileView skips a write whose text equals its own cached copy, which
-        // starts empty because reads happen separately. Writing "" through it
-        // can therefore silently do nothing. Truncating directly has no such
-        // opinion. There is no partial state to protect here either: the file
-        // ends up old or empty.
-        if (value === "") {
-          truncater.running = true
-          return
+      function setText(value) { writer.setText(value) }
+
+      Connections {
+        target: slot.writer
+        function onCompleted(code, error) {
+          root.acceptWrite(slot.index, slot.writer.payload, code, error)
         }
-        // External edits and truncation leave FileView's cached text stale.
-        // Unload that cache before writing, so restoring a previous value is
-        // not skipped. preload:false keeps this from reading the file.
-        file.path = ""
-        file.path = slot.filePath
-        file.setText(value)
       }
 
       FileView {
-        id: file
         path: slot.filePath
         preload: false
         watchChanges: true
-        atomicWrites: true
         printErrors: false
-
         onFileChanged: slot.reload()
-      }
-
-      Process {
-        id: truncater
-        command: ["bash", "-c", ': > "$1"', "--", slot.filePath]
       }
 
       Process {
         id: reader
         property bool queued: false
-
-        // printf writes the count first; head then writes at most the limit.
-        // A missing file yields "0" and no content, which is the correct
-        // starting state for an empty dot rather than an error.
-        command: ["bash", "-c",
-          // One bounded count decides everything: `wc -c` on a stream capped at
-          // the limit can never report more than limit + 1, however large the
-          // file is, so there is no size to trust and no window to race.
-          // `stat` reads nothing and only names the real size for the message.
-          // Content is sent only when it is going to be used.
-          'limit="$1"; f="$2";'
-          + ' n="$(head -c "$((limit + 1))" "$f" 2>/dev/null | wc -c)";'
-          + ' printf "%s %s\n" "$n" "$(stat -c %s "$f" 2>/dev/null || echo 0)";'
-          + ' [ "$n" -le "$limit" ] && head -c "$limit" "$f" 2>/dev/null; true',
-          "--", String(SevenModel.MAX_NOTE_BYTES), slot.filePath]
-
+        command: ["timeout", "--kill-after=1s", "3s", "perl", root.helperPath,
+          "read", slot.filePath, String(SevenModel.MAX_NOTE_BYTES)]
         stdout: StdioCollector { id: readerOutput; waitForEnd: true }
+        stderr: StdioCollector { id: readerError; waitForEnd: true }
 
         onExited: function(code) {
-          if (code === 0) root.acceptRead(slot.index, String(readerOutput.text || ""))
+          if (!slot.writer.running) {
+            if (code === 0) root.acceptRead(slot.index, String(readerOutput.text || ""))
+            else root.refuseIo(slot.index, String(readerError.text || "").trim())
+          }
+          if (!slot.initiallyLoaded) {
+            slot.initiallyLoaded = true
+            root.loading--
+            if (root.loading === 0) root.ready = true
+          }
           if (queued) {
             queued = false
             slot.reload()
@@ -389,28 +414,22 @@ Item {
     }
   }
 
-  // Which dot you were last on. Small enough to be its own file rather than
-  // dragging a JSON state document into a plugin that otherwise has none.
-  //
-  // Written by Seven, but it sits in the same directory the notes do, which is
-  // externally editable and may be synced. It is read the same bounded way, so
-  // nothing in that directory can be made big enough to matter.
-  FileView {
-    id: activeFile
-    path: root.statePath
-    preload: false
-    watchChanges: false
-    atomicWrites: true
-    printErrors: false
-  }
-
   Process {
     id: activeReader
-    command: ["bash", "-c", 'head -c 16 "$1" 2>/dev/null', "--", root.statePath]
+    command: ["timeout", "--kill-after=1s", "3s", "perl", root.helperPath,
+      "read", root.statePath, "16"]
     stdout: StdioCollector { id: activeOutput; waitForEnd: true }
+    stderr: StdioCollector { id: activeError; waitForEnd: true }
     onExited: function(code) {
-      if (code !== 0) return
-      var parsed = SevenModel.indexFromNumber(String(activeOutput.text || "").trim())
+      root.loading--
+      if (root.loading === 0) root.ready = true
+      if (code !== 0) {
+        console.warn("seven: could not read active dot:", String(activeError.text || "").trim())
+        return
+      }
+      var read = SevenModel.parseBoundedRead(String(activeOutput.text || ""))
+      if (!read.valid || read.bytes > 16) return
+      var parsed = SevenModel.indexFromNumber(read.text.trim())
       if (parsed >= 0) root.activeIndex = parsed
     }
   }
@@ -559,11 +578,12 @@ Item {
       var index = SevenModel.indexFromNumber(dot)
       if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
       // Not the same as empty, and must not read as empty to a script.
-      if (root.isOversized(index)) return oversizedError(index)
+      if (root.isRefused(index)) return refusedError(index)
       return root.textAt(index)
     }
 
-    function oversizedError(index: int): string {
+    function refusedError(index: int): string {
+      if (!root.isOversized(index)) return "error: " + root.noteError(index)
       return "error: dot " + (index + 1) + " is "
         + SevenModel.formatBytes(root.oversizedBytes(index)) + ", over the "
         + SevenModel.formatBytes(SevenModel.MAX_NOTE_BYTES)
@@ -573,7 +593,7 @@ Item {
     function append(dot: string, text: string): string {
       var index = SevenModel.indexFromNumber(dot)
       if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
-      if (root.isOversized(index)) return oversizedError(index)
+      if (root.isRefused(index)) return refusedError(index)
       root.appendText(index, text)
       return "ok"
     }
@@ -582,7 +602,7 @@ Item {
     // so a script can tell.
     function capture(text: string): string {
       var index = root.captureIndex()
-      if (root.isOversized(index)) return oversizedError(index)
+      if (root.isRefused(index)) return refusedError(index)
       root.appendText(index, text)
       return String(index + 1)
     }
@@ -592,7 +612,7 @@ Item {
       if (index < 0) return "error: dot must be 1-" + SevenModel.DOT_COUNT
       // Refused rather than obeyed: clearing would mean writing an empty file
       // over one Seven never read.
-      if (root.isOversized(index)) return oversizedError(index)
+      if (root.isRefused(index)) return refusedError(index)
       root.clearDot(index)
       return "ok"
     }
@@ -618,6 +638,7 @@ Item {
         panel: root.uiState,
         limitBytes: SevenModel.MAX_NOTE_BYTES,
         oversized: root.oversized,
+        ioErrors: root.ioErrors,
         shortcutRegistered: root.shortcutRegistered,
         diagnostic: root.shortcutDiagnostic,
         counts: root.texts.map(function(value) { return String(value || "").length })
