@@ -530,6 +530,15 @@ test("preview markdown cannot make the shell fetch anything", () => {
   // Reference-style images start the same way and are defused the same way.
   assert.equal(model.previewSource("![alt][ref]"), "[alt][ref]")
 
+  // Qt's Markdown renderer also accepts HTML rich text. Escaping only an
+  // <img> tag misses CSS background images and variant tag syntax.
+  assert.equal(model.previewSource('<img src="https://example.test/image">'),
+    '&lt;img src="https://example.test/image">')
+  assert.equal(model.previewSource('Text <IMG src="https://example.test/image"> after'),
+    'Text &lt;IMG src="https://example.test/image"> after')
+  assert.equal(model.previewSource('<span style="background-image:url(https://example.test/image)">x</span>'),
+    '&lt;span style="background-image:url(https://example.test/image)">x&lt;/span>')
+
   // Backslash-escaping the "!" instead of removing it would be reversible:
   // this input already renders a literal "!", and adding a backslash would
   // make it an escaped backslash followed by a live image.

@@ -210,7 +210,7 @@ function escapeRichText(value) {
     .replace(/'/g, "&#39;")
 }
 
-// Markdown for the preview, with image syntax defused.
+// Markdown for the preview, with image syntax and raw HTML defused.
 //
 // Qt renders `![alt](url)` by fetching url -- so a note could make the shell
 // issue an HTTP request, to an address of the note author's choosing, simply
@@ -221,8 +221,11 @@ function escapeRichText(value) {
 // undone: "\![x](u)" is already a literal "!" plus a link, and prefixing
 // another backslash yields "\\![x](u)" -- an escaped backslash followed by a
 // live image again. Removing the character has no such inverse.
+// Qt also accepts HTML inside Markdown, including images and CSS background
+// images. Escaping every raw "<" prevents HTML tags from reaching its rich
+// text parser without trying to enumerate dangerous tags or attributes.
 function previewSource(text) {
-  return string(text).replace(/!(?=\[)/g, "")
+  return string(text).replace(/!(?=\[)/g, "").replace(/</g, "&lt;")
 }
 
 // Schemes a link in a note may hand to xdg-open. http(s) and mailto open a

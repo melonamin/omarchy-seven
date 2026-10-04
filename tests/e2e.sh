@@ -479,9 +479,9 @@ if ! curl -fsS -o /dev/null "http://127.0.0.1:$beacon_port/selftest" 2>/dev/null
 else
   : > "$beacon_dir/hits"
 
-  # A markdown image, and an HTML img tag, both pointing at the local server.
-  printf '# note\n\n![pic](http://127.0.0.1:%s/md-image)\n\n<img src="http://127.0.0.1:%s/html-image">\n' \
-    "$beacon_port" "$beacon_port" > "$dots_dir/3.md"
+  # Markdown, inline HTML, and CSS image forms all point at the local server.
+  printf '# note\n\n![pic](http://127.0.0.1:%s/md-image)\n\nInline <img src="http://127.0.0.1:%s/html-image"> here\n\n<span style="background-image:url(http://127.0.0.1:%s/css-image)">background</span>\n' \
+    "$beacon_port" "$beacon_port" "$beacon_port" > "$dots_dir/3.md"
   # And a note whose *first line* is a tag, which is what the bar tooltip shows.
   printf '<img src="http://127.0.0.1:%s/tooltip">\n' "$beacon_port" > "$dots_dir/4.md"
   sleep 1.5

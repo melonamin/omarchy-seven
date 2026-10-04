@@ -212,6 +212,9 @@ merely by your hovering the bar — a note that beacons.
   renders as an ordinary link, so the words stay and nothing is fetched until
   you deliberately click. The preview also holds no text while it is hidden,
   because a `Text` parses and fetches whether or not it is drawn.
+- Raw HTML is shown as text in the Markdown preview. Qt supports HTML images
+  and CSS background images there, so Seven escapes `<` before rendering while
+  keeping ordinary Markdown formatting and links.
 - A link may only hand `http`, `https`, or `mailto` to `xdg-open`. `file:` and
   app-registered schemes can open or run things, and a note picks both the
   label and the target, so you cannot see where one goes before clicking.
