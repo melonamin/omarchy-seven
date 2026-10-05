@@ -208,9 +208,11 @@ merely by your hovering the bar — a note that beacons.
 
 - The bar tooltip escapes note text and wraps it in a tag of its own, so the
   format is settled rather than guessed and there is no markup a note can add.
-- Markdown images are defused before the preview sees them: `![alt](url)`
+- Markdown images are defused inside the preview component: `![alt](url)`
   renders as an ordinary link, so the words stay and nothing is fetched until
-  you deliberately click. The preview also holds no text while it is hidden,
+  you deliberately click. Entire consecutive `!` runs before `[` are removed,
+  including reference images; the result contains no image opener and stays
+  identical when sanitized again. The preview also holds no text while it is hidden,
   because a `Text` parses and fetches whether or not it is drawn.
 - Raw HTML is shown as text in the Markdown preview. Qt supports HTML images
   and CSS background images there, so Seven escapes `<` before rendering while
@@ -228,8 +230,9 @@ merely by your hovering the bar — a note that beacons.
   replacing it with a regular file and reopening the dot retries access. Failed
   saves keep the pending text in memory. Perl and coreutils are supplied by Omarchy.
 
-`tests/e2e.sh` plants each of these against a local HTTP server and asserts it
-hears nothing.
+`tests/preview.test.js` renders adversarial notes in the actual preview component
+against a local HTTP server, with unsanitized Markdown and HTML images as positive
+controls. `tests/e2e.sh` also checks file and IPC input through the live panel.
 
 ## How it works
 
@@ -271,12 +274,15 @@ panel closing, which is the entire point of a scratchpad.
 tests/static.sh                   # manifest, QML syntax, wiring invariants
 node --test tests/model.test.js   # unit: editing, counts, settings, the sheet
 node --test tests/filesystem.test.js # isolated: safe I/O, races, deadlines, service IPC
+node --test tests/preview.test.js  # isolated: real Qt rendering and HTTP resource checks
 tests/integration.sh              # live: IPC round trips, disk, external edits
 tests/e2e.sh                      # live: drives the real panel with wtype
 ```
 
 The filesystem tests need Perl, coreutils, and Quickshell, and use temporary
 notes without touching personal notes or compositor bindings.
+The preview test uses Quickshell's offscreen renderer and a loopback HTTP
+server; it does not need a running desktop or access personal notes.
 
 The last two need Seven installed and enabled in an Omarchy session. Both
 snapshot all seven notes and restore them byte-for-byte on exit. `tests/e2e.sh`

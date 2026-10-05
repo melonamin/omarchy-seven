@@ -220,12 +220,18 @@ function escapeRichText(value) {
 // The "!" is removed rather than backslash-escaped because escaping can be
 // undone: "\![x](u)" is already a literal "!" plus a link, and prefixing
 // another backslash yields "\\![x](u)" -- an escaped backslash followed by a
-// live image again. Removing the character has no such inverse.
+// live image again. Remove the entire consecutive run: removing only its last
+// character would turn "!![x](u)" into another live image. Consume every run
+// before checking its next character to avoid quadratic regex backtracking on
+// a long run with no following bracket. The result has no "![" and is idempotent.
 // Qt also accepts HTML inside Markdown, including images and CSS background
 // images. Escaping every raw "<" prevents HTML tags from reaching its rich
 // text parser without trying to enumerate dangerous tags or attributes.
 function previewSource(text) {
-  return string(text).replace(/!(?=\[)/g, "").replace(/</g, "&lt;")
+  var source = string(text)
+  return source.replace(/!+/g, function(markers, offset) {
+    return source.charAt(offset + markers.length) === "[" ? "" : markers
+  }).replace(/</g, "&lt;")
 }
 
 // Schemes a link in a note may hand to xdg-open. http(s) and mailto open a

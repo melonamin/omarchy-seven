@@ -621,3 +621,26 @@ test("the size limit is a real bound and formats readably", () => {
   assert.match(model.oversizedNotice(5, 536870912), /Dot 6 is 512\.0 MiB/)
   assert.match(model.oversizedNotice(5, 536870912), /6\.md/)
 })
+
+test("preview transformation removes all image openers and is idempotent", () => {
+  const cases = require("./preview-cases.js")("https://example.test")
+  // Exhaust short delimiter combinations too, including adjacent replacements.
+  let combinations = [""]
+  for (let length = 0; length < 5; length++) {
+    combinations = combinations.flatMap(prefix => ["!", "[", "\\", "<", "&", "\n"].map(c => prefix + c))
+    cases.push(...combinations)
+  }
+  for (const source of cases) {
+    const output = model.previewSource(source)
+    assert.ok(!output.includes("!["), JSON.stringify(source))
+    assert.ok(!output.includes("<"), JSON.stringify(source))
+    assert.equal(model.previewSource(output), output, JSON.stringify(source))
+  }
+  assert.equal(model.previewSource("!![x](u) !!![y][ref] !!!!"), "[x](u) [y][ref] !!!!")
+})
+
+test("maximum-size punctuation runs preserve ordinary text without backtracking", () => {
+  const punctuation = "!".repeat(model.MAX_NOTE_BYTES)
+  assert.equal(model.previewSource(punctuation), punctuation)
+  assert.equal(model.previewSource(punctuation + "[x](u)"), "[x](u)")
+})

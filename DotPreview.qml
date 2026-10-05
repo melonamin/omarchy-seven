@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import "SevenModel.js" as SevenModel
 
 // The rendered half of a dot. Qt's own Markdown renderer does the work, so
 // there is no parser in this plugin to drift from CommonMark or to get wrong.
@@ -23,9 +24,10 @@ ScrollView {
 
     width: root.availableWidth
     // The dot is markdown source on disk; this is the only place it is ever
-    // interpreted. Editing always shows the raw text.
+    // interpreted. Sanitize here so every caller gets the same protection;
+    // editing always shows the raw text.
     textFormat: Text.MarkdownText
-    text: root.source === "" ? "*Nothing here yet.*" : root.source
+    text: root.source === "" ? "*Nothing here yet.*" : SevenModel.previewSource(root.source)
     wrapMode: Text.Wrap
     color: root.foreground
     linkColor: Color.accent

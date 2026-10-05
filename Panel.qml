@@ -367,7 +367,7 @@ Panel {
             // note left unread would otherwise reach out the moment the panel
             // opened on any note at all.
             source: root.previewing && !root.activeRefused
-              ? SevenModel.previewSource(root.activeText)
+              ? root.activeText
               : ""
 
             onLinkActivated: function(url) {

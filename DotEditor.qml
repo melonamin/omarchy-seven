@@ -72,6 +72,7 @@ ScrollView {
     id: area
 
     width: root.availableWidth
+    textFormat: TextEdit.PlainText
     wrapMode: TextArea.Wrap
     selectByMouse: true
     persistentSelection: true

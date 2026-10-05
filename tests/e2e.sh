@@ -480,8 +480,8 @@ else
   : > "$beacon_dir/hits"
 
   # Markdown, inline HTML, and CSS image forms all point at the local server.
-  printf '# note\n\n![pic](http://127.0.0.1:%s/md-image)\n\nInline <img src="http://127.0.0.1:%s/html-image"> here\n\n<span style="background-image:url(http://127.0.0.1:%s/css-image)">background</span>\n' \
-    "$beacon_port" "$beacon_port" "$beacon_port" > "$dots_dir/3.md"
+  printf '# note\n\n![pic](http://127.0.0.1:%s/md-image)\n\nInline <img src="http://127.0.0.1:%s/html-image"/> here\n\n<span style="background-image:url(http://127.0.0.1:%s/css-image)">background</span>\n\n!![double](http://127.0.0.1:%s/double)\n\n!!!![reference][ref]\n\n[ref]: http://127.0.0.1:%s/reference\n' \
+    "$beacon_port" "$beacon_port" "$beacon_port" "$beacon_port" "$beacon_port" > "$dots_dir/3.md"
   # And a note whose *first line* is a tag, which is what the bar tooltip shows.
   printf '<img src="http://127.0.0.1:%s/tooltip">\n' "$beacon_port" > "$dots_dir/4.md"
   sleep 1.5
@@ -496,6 +496,14 @@ else
   [[ ! -s $beacon_dir/hits ]] \
     || fail "previewing a note fetched $(tr '\n' ' ' < "$beacon_dir/hits")"
   pass "previewing a note with a remote image fetches nothing"
+
+  ipc_image="!!![IPC](http://127.0.0.1:$beacon_port/ipc-image)"
+  omarchy-shell seven append 3 "$ipc_image" >/dev/null
+  [[ $(omarchy-shell seven read 3) == *"$ipc_image"* ]] || fail "IPC image payload did not reach the active note"
+  sleep 2
+  [[ ! -s $beacon_dir/hits ]] \
+    || fail "updating a preview over IPC fetched $(tr '\n' ' ' < "$beacon_dir/hits")"
+  pass "appending an image payload over IPC while previewing fetches nothing"
 
   omarchy-shell -q seven close >/dev/null 2>&1 || true
   await_closed || true

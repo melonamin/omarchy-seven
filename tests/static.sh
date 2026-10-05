@@ -189,7 +189,7 @@ sed -n '/function tooltipFor/,/^}/p' "$root_dir/SevenModel.js" | grep -q 'escape
 pass "the bar tooltip escapes note content"
 
 # Qt fetches the target of a markdown image node when it renders one.
-sed -n '/DotPreview {/,/^          }/p' "$root_dir/Panel.qml" | grep -q 'SevenModel.previewSource' \
+grep -q 'text:.*SevenModel.previewSource(root.source)' "$root_dir/DotPreview.qml" \
   || fail "the preview renders note markdown without defusing image syntax"
 sed -n '/DotPreview {/,/^          }/p' "$root_dir/Panel.qml" | grep -qE 'source:.*root\.previewing' \
   || fail "the preview should hold no source while hidden; it parses and fetches either way"
